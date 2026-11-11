@@ -68,6 +68,21 @@ function request(action, payload = {}) {
   return { action, payload, requestId: 'request-1', clientId: 'client-1' };
 }
 
+test('account actions require authenticated device identity and use the selected connector service', async () => {
+  const calls: any[] = [];
+  const handler = createRequestHandler({ ...createDependencies(), accounts: {
+    async dispatch(action, payload, owner) { calls.push({ action, payload, owner }); return { status: 'pending' }; },
+  } });
+  assert.equal((await handler(request('account.login.start'))).error, 'account_authenticated_device_required');
+  assert.equal(calls.length, 0);
+  const result = await handler({ ...request('account.login.start', { owner: 'forged' }), clientDeviceId: 'paired-phone' });
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].owner, 'paired-phone');
+  assert.equal(calls[0].action, 'account.login.start');
+  const missing = createRequestHandler(createDependencies());
+  assert.equal((await missing({ ...request('account.sessions.list'), clientDeviceId: 'paired-phone' })).error, 'account_control_unavailable');
+});
+
 test('Desktop controls route native models, exact-turn stop and request-scoped approval without app-server mutations', async () => {
   const calls: any[] = [];
   const native = { read: async id => ({ threadId: id, approvals: [], waitingOnApproval: false }),

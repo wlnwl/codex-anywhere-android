@@ -23,6 +23,7 @@ const DEFAULT_REQUEST_RESULT_TTL_MS = 2 * 60_000;
 const FILE_REQUEST_RESULT_TTL_MS = 30 * 60_000;
 
 const DEDUPLICATED_ACTIONS = new Set([
+  'account.sessions.switch', 'account.login.start', 'account.login.cancel', 'account.desktop.restart',
   'attachment.upload',
   'file.upload.begin', 'file.upload.chunk', 'file.upload.complete', 'file.upload.cancel',
   'file.download.open', 'file.download.chunk', 'file.download.close',

@@ -14,6 +14,10 @@ import { acquireConnectorInstanceLock } from './instance-lock.js';
 import { loadOrCreateConnectorDeviceIdentity } from './device-identity.js';
 import { createRequestHandler } from './request-handler.js';
 import { monitorConnectorSocket, scheduleReferencedRetry } from './reconnect.js';
+import { AccountControls } from './account-controls.js';
+import { DesktopRestarter } from './desktop-restart.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { ConnectorSecureChannels } from './secure-channels.js';
 import { connectorSessionModelSettingsPath } from './session-model-settings.js';
 import { createConnectorAuthProof } from '../shared/auth.js';
@@ -53,6 +57,28 @@ const codex = new CodexAppServer({
   modelSettingsPath: connectorSessionModelSettingsPath(deviceId),
 });
 const desktop = mode === 'desktop' ? new CodexDesktopClient() : null;
+// Desktop turn runtimes are released between turns. Device-code login needs an
+// independent runtime so a chat refresh or completed turn cannot cancel OAuth.
+const accountCodex = mode === 'desktop' ? new CodexAppServer({ bin: codexBin, allowedRoots }) : codex;
+const accounts = new AccountControls({
+  async request(method, params) {
+    await accountCodex.ensureStarted();
+    return accountCodex.rpcRaw(method, params, 45_000);
+  },
+  onNotification(listener) {
+    accountCodex.on('account-notification', listener);
+    return () => { accountCodex.off('account-notification', listener); };
+  },
+}, {
+  desktop: mode === 'desktop',
+  restarter: new DesktopRestarter(),
+  stateFile: join(homedir(), '.codex-anywhere', 'account-desktop-restart.json'),
+  isBusy: () => codex.activeTurns.size > 0,
+  onAccountChanged() {
+    codex.modelCatalogCache = null;
+    if (mode === 'desktop' && !codex.activeTurns.size) return codex.close();
+  },
+});
 const downloads = new DownloadManager({
   allowedRoots: [...allowedRoots, generatedImagesDirectory(), visualizationsDirectory(), UPLOAD_DIRECTORY],
   allowAnyFileDownload,
@@ -63,6 +89,7 @@ const browser = process.env.BRIDGE_BROWSER_ENDPOINT_FILE
 const browserEndpoint = browser
   ? await startBrowserEndpoint(browser, process.env.BRIDGE_BROWSER_ENDPOINT_FILE!) : undefined;
 const handleRequest = createRequestHandler({
+  accounts,
   onSessionStatuses: snapshot => secureChannels.broadcastEvent({ type: 'event', event: 'sessions.status', payload: snapshot }),
   browser,
   codex,
@@ -191,6 +218,8 @@ async function shutdown() {
   secureChannels.clear();
   socket?.close(1000, 'connector shutdown');
   desktop?.close();
+  accounts.close();
+  if (accountCodex !== codex) await accountCodex.close();
   await downloads.closeAll();
   await codex.close();
   await connectorLock.close();

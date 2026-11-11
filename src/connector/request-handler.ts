@@ -4,6 +4,7 @@ import { measureOperation, operationMetrics } from './operation-metrics.js';
 import type { DesktopControls } from './desktop-controls.js';
 import type { FileUploadManager } from './file-uploads.js';
 import type { BrowserSessionBroker } from '../browser-control/session-broker.js';
+import type { AccountControls } from './account-controls.js';
 import { SESSION_STATUS_MAX_AGE_MS, type SessionStatusSnapshot } from '../shared/session-status.js';
 import {
   mergeDesktopSessionStatuses,
@@ -61,6 +62,7 @@ type DesktopGateway = {
   restoreThread?(options: Payload): Promise<any>;
 };
 type Dependencies = {
+  accounts?: Pick<AccountControls, 'dispatch'>;
   onSessionStatuses?(snapshot: SessionStatusSnapshot): void;
   browser?: BrowserSessionBroker;
   codex: CodexGateway;
@@ -106,7 +108,7 @@ async function headerModelCatalog(codex: CodexGateway) {
 }
 
 export function createRequestHandler({
-  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, browser,
+  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, browser, accounts,
   deviceLabel = deviceId, mode = desktop ? 'desktop' : 'headless',
   networkAccess = false, allowFullAccess = false, onSessionStatuses,
 }: Dependencies) {
@@ -141,7 +143,7 @@ export function createRequestHandler({
     try {
       const run = () => dispatchAction({
         action, payload, requestId, clientId, clientDeviceId,
-        codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser,
+        codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, accounts,
         networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads,
       });
       const data = await (MEASURED_ACTIONS.has(action) ? measureOperation(action, run) : run());
@@ -154,9 +156,14 @@ export function createRequestHandler({
 
 async function dispatchAction({
   action, payload, requestId, clientId, clientDeviceId,
-  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser,
+  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, accounts,
   networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads,
 }: DispatchContext) {
+  if (action.startsWith('account.')) {
+    if (!accounts) throw new Error('account_control_unavailable');
+    if (!clientDeviceId) throw new Error('account_authenticated_device_required');
+    return accounts.dispatch(action, payload, clientDeviceId);
+  }
   if (action === 'connector.diagnostics') return { operations: operationMetrics() };
   if (action.startsWith('browser.')) {
     if (!browser) throw new Error('browser_control_not_enabled_on_connector');

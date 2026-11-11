@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-This distribution adds a [native Android client (v0.5.3)](mobile-android/README.md) to the MIT-licensed [Codex Anywhere upstream project](https://github.com/gaotong132/codex-anywhere). The web and relay documentation below refers to upstream v0.4.5.
+This distribution adds a [native Android client (v0.6.2)](mobile-android/README.md) to the MIT-licensed [Codex Anywhere upstream project](https://github.com/gaotong132/codex-anywhere). The bundled connector supports viewing and switching Codex accounts and workspaces, device-code sign-in, and tracking the restart of the packaged Windows desktop app. The web and relay documentation below refers to upstream v0.4.5.
 
 Documentation for **v0.4.5 (2026-10-22)** · [Release and upgrade](docs/release-0.4.5.md) · [Documentation index](docs/README.md)
 

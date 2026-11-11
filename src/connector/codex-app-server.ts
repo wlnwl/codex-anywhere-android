@@ -1244,7 +1244,10 @@ export class CodexAppServer extends EventEmitter {
       else pending.resolve(Object.hasOwn(message, 'result') ? message.result : message);
       return;
     }
-    if (typeof message.method === 'string') this.handleNotification(message.method, message.params || {});
+    if (typeof message.method === 'string') {
+      if (message.method.startsWith('account/')) this.emit('account-notification', message.method, message.params || {});
+      this.handleNotification(message.method, message.params || {});
+    }
   }
 
   handleServerRequest(message: JsonObject) {

@@ -16,5 +16,5 @@ Pop-Location
 & "$bt\zipalign.exe" -f 4 out/unsigned.apk out/aligned.apk
 $keytool=Join-Path $env:JAVA_HOME bin/keytool.exe
 if(!(Test-Path out/development.jks)){& $keytool -genkeypair -keystore out/development.jks -storepass android -keypass android -alias development -dname 'CN=Codex Anywhere Local' -keyalg RSA -validity 3650}
-& "$bt\apksigner.bat" sign --ks out/development.jks --ks-pass pass:android --out out/CodexAnywhere-0.5.3.apk out/aligned.apk
-& "$bt\apksigner.bat" verify out/CodexAnywhere-0.5.3.apk
+& "$bt\apksigner.bat" sign --ks out/development.jks --ks-pass pass:android --out out/CodexAnywhere-0.6.2.apk out/aligned.apk
+& "$bt\apksigner.bat" verify out/CodexAnywhere-0.6.2.apk

@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-此版本在 MIT 许可的 [Codex Anywhere 上游项目](https://github.com/gaotong132/codex-anywhere)基础上加入了[原生 Android 客户端 v0.5.3](mobile-android/README.md)。下文的网页端和中继文档对应上游 v0.4.5。
+此版本在 MIT 许可的 [Codex Anywhere 上游项目](https://github.com/gaotong132/codex-anywhere)基础上加入了[原生 Android 客户端 v0.6.2](mobile-android/README.md)。配套连接器支持查看和切换 Codex 账号及工作区、设备码登录和查询 Windows 桌面应用的重启结果。下文的网页端和中继文档对应上游 v0.4.5。
 
 文档对应 **v0.4.5（2026-10-22）** · [发布与升级](docs/release-0.4.5.zh-CN.md) · [文档索引](docs/README.zh-CN.md)
 
