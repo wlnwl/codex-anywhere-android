@@ -18,8 +18,6 @@ type SessionSidebarProps = {
   environmentIds: string[];
   environmentLabels?: EnvironmentLabels;
   onEnvironmentRename?: (id: string, label: string) => Promise<void>;
-  onOpenAccounts?: () => void;
-  accountOnline?: boolean;
   onlineEnvironmentIds: string[];
   sessions: Session[];
   selectedThreadId: string | null;
@@ -45,8 +43,6 @@ export const SessionSidebar = memo(function SessionSidebar({
   environmentIds,
   environmentLabels,
   onEnvironmentRename,
-  onOpenAccounts,
-  accountOnline,
   onlineEnvironmentIds,
   sessions,
   selectedThreadId,
@@ -97,7 +93,6 @@ export const SessionSidebar = memo(function SessionSidebar({
       </div>
       <EnvironmentSwitcher value={environmentId} environmentIds={environmentIds}
         labels={environmentLabels} onRename={onEnvironmentRename}
-        onOpenAccounts={onOpenAccounts} accountOnline={accountOnline}
         onlineEnvironmentIds={onlineEnvironmentIds} onChange={onEnvironmentChange} />
       {searchOpen && (
         <label className="compact-search session-search-panel">

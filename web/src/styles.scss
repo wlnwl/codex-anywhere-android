@@ -212,15 +212,6 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   text-transform: uppercase;
 }
 .environment-picker-heading { display: flex; align-items: center; justify-content: space-between; }
-.environment-picker-actions { display: flex; align-items: center; gap: 3px; }
-.environment-account-trigger {
-  flex: 0 0 auto; min-height: 28px; padding: 0 8px;
-  border: 1px solid #2f405a; border-radius: 6px;
-  color: #cbdcf6; background: #172438; font-size: 11px; font-weight: 600;
-  @include interaction.hover(':not(:disabled)') { border-color: #526c95; background: #223552; }
-  &:focus-visible { outline: 2px solid #6497ef; outline-offset: 1px; }
-  &:disabled { opacity: .5; cursor: default; }
-}
 .environment-rename-trigger {
   display: grid; place-items: center; width: 28px; height: 28px; min-height: 28px;
   padding: 6px; border: 0; border-radius: 5px; background: transparent; color: #8e9cb1;
@@ -253,11 +244,12 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
 .environment-picker-direct {
   min-height: 0; grid-template-columns: minmax(0, 1fr); padding: 4px; gap: 2px; margin-bottom: 5px;
   background: transparent;
-  &:has(.environment-picker-actions) { grid-template-columns: minmax(0, 1fr) auto; column-gap: 4px; }
+  &:has(.environment-rename-trigger) { grid-template-columns: minmax(0, 1fr) 24px; column-gap: 4px; }
   .environment-picker-heading { display: contents; }
   .environment-picker-label { display: none; }
-  .environment-picker-actions { grid-column: 2; grid-row: 1; align-self: center; }
-  .environment-rename-trigger { width: 24px; height: 28px; padding: 5px; }
+  .environment-rename-trigger {
+    grid-column: 2; grid-row: 1; align-self: center; width: 24px; height: 28px; padding: 5px;
+  }
   .environment-shortcuts, .environment-empty { grid-column: 1; grid-row: 1; }
   .environment-offline, .environment-rename { grid-column: 1 / -1; }
 }
@@ -455,6 +447,17 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   backdrop-filter: blur(12px);
 }
 .topbar::before { width: 30px; height: 30px; flex: 0 0 30px; content: ''; }
+.topbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.account-trigger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 34px; padding: 0 10px; white-space: nowrap;
+  border: 1px solid #3a4d69; border-radius: 8px;
+  color: #e2edff; background: #1c2c43; font-size: 12px; font-weight: 650;
+  svg { width: 15px; height: 15px; }
+  @include interaction.hover(':not(:disabled)') { border-color: #617da8; background: #283f60; }
+  &:focus-visible { outline: 2px solid #6497ef; outline-offset: 2px; }
+  &:disabled { opacity: .5; cursor: default; }
+}
 .conversation-heading { position: relative; min-width: 0; flex: 1; display: grid; gap: 3px; }
 .conversation-controls { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; }
 .conversation-title { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; }

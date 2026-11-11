@@ -3,11 +3,9 @@ import { CustomSelect, SidebarIcon } from './ui-components';
 import { environmentDisplayName, environmentShortName, type EnvironmentLabels } from './execution-environments';
 import { t } from './i18n';
 
-export function EnvironmentSwitcher({ value, environmentIds, onlineEnvironmentIds, onChange, labels = {}, onRename,
-  onOpenAccounts, accountOnline }: {
+export function EnvironmentSwitcher({ value, environmentIds, onlineEnvironmentIds, onChange, labels = {}, onRename }: {
   value: string; environmentIds: string[]; onlineEnvironmentIds: string[]; onChange: (id: string) => void;
   labels?: EnvironmentLabels; onRename?: (id: string, label: string) => Promise<void>;
-  onOpenAccounts?: () => void; accountOnline?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
@@ -45,14 +43,9 @@ export function EnvironmentSwitcher({ value, environmentIds, onlineEnvironmentId
   return <div className={`environment-picker${direct ? ' environment-picker-direct' : ''}`}>
     <div className="environment-picker-heading">
       <span className="environment-picker-label">{t('执行环境', 'Execution environment')}</span>
-      {environmentIds.includes(value) && (onOpenAccounts || onRename) && <div className="environment-picker-actions">
-        {onOpenAccounts && <button type="button" className="environment-account-trigger" disabled={!accountOnline}
-          title={accountOnline ? t('管理所选设备的 Codex 账号', 'Manage Codex accounts on the selected device') : t('设备连接后可管理账号', 'Connect to the device to manage accounts')}
-          onClick={onOpenAccounts}>{t('账号', 'Account')}</button>}
-        {onRename && <button type="button" className="environment-rename-trigger" disabled={saving}
-          aria-label={t('重命名设备', 'Rename device')} title={t('重命名设备', 'Rename device')}
-          onClick={() => { setName(displayName(value)); setError(''); setEditing(true); }}><SidebarIcon name="edit" /></button>}
-      </div>}
+      {onRename && environmentIds.includes(value) && <button type="button" className="environment-rename-trigger" disabled={saving}
+        aria-label={t('重命名设备', 'Rename device')} title={t('重命名设备', 'Rename device')}
+        onClick={() => { setName(displayName(value)); setError(''); setEditing(true); }}><SidebarIcon name="edit" /></button>}
     </div>
     {direct ? <>
       {shortcuts.length > 0 ? <div className="environment-shortcuts" role="group" aria-label={t('切换执行环境', 'Switch execution environment')}>

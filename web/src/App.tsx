@@ -2301,8 +2301,6 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         environmentIds={environmentIds}
         environmentLabels={environmentLabels}
         onEnvironmentRename={hasEnvironmentInventory ? renameEnvironment : undefined}
-        onOpenAccounts={openAccounts}
-        accountOnline={online}
         onlineEnvironmentIds={onlineEnvironmentIds}
         sessions={sessions}
         selectedThreadId={threadId}
@@ -2544,12 +2542,30 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               <BrowserSessionStatus key={`${environmentId}:${threadId}`} environmentId={environmentId} threadId={threadId} online={online} request={request} />
             </div>
           </div>
-          <PresenceIndicator
-            online={online}
-            executionState={executionState}
-            statusText={statusText}
-            contextUsage={contextUsage}
-          />
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="account-trigger"
+              aria-haspopup="dialog"
+              disabled={!online}
+              title={online
+                ? t('管理所选电脑的 Codex 账号', 'Manage Codex accounts on the selected computer')
+                : t('连接电脑后可管理账号', 'Connect to the computer to manage accounts')}
+              onClick={openAccounts}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                <circle cx="12" cy="8" r="3.5" />
+                <path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1" strokeLinecap="round" />
+              </svg>
+              <span>{t('账号', 'Account')}</span>
+            </button>
+            <PresenceIndicator
+              online={online}
+              executionState={executionState}
+              statusText={statusText}
+              contextUsage={contextUsage}
+            />
+          </div>
         </header>
 
         {editTarget && editTarget.environment === environmentId && editTarget.threadId === threadId
