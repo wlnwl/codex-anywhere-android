@@ -2,7 +2,9 @@
 
 [English](README.md) | 简体中文
 
-此版本在 MIT 许可的 [Codex Anywhere 上游项目](https://github.com/gaotong132/codex-anywhere)基础上加入了[原生 Android 客户端 v0.6.2](mobile-android/README.md)。配套连接器支持查看和切换 Codex 账号及工作区、设备码登录和查询 Windows 桌面应用的重启结果。下文的网页端和中继文档对应上游 v0.4.5。
+此版本在 MIT 许可的 Codex Anywhere 上游项目基础上增加了原生 Android 客户端，以及 Android 和网页端的 Codex 账号管理。下文的上游网页端和中继文档对应 v0.4.5。[查看上游项目](https://github.com/gaotong132/codex-anywhere)
+
+[下载 Android APK v0.6.2](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.2/CodexAnywhere-0.6.2.apk) · [发布说明](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.2) · [安卓版配置与构建](mobile-android/README.md)
 
 文档对应 **v0.4.5（2026-10-22）** · [发布与升级](docs/release-0.4.5.zh-CN.md) · [文档索引](docs/README.zh-CN.md)
 
@@ -23,6 +25,17 @@ Codex Anywhere 专注个人使用场景，会话保存在执行节点上；不�
 
 > [!IMPORTANT]
 > 这是一个非官方社区项目，与 OpenAI 无隶属关系，也未得到 OpenAI 的认可或背书。
+
+## Android 与网页端账号管理
+
+- **连接自托管中继。** 安装 APK 后，在 Android 端打开「连接 → 扫码」，扫描自己的 HTTPS 中继生成的配对二维码。App 会从二维码填入中继地址。也可以手动填写中继地址并粘贴十分钟内有效的单次配对链接。[中继部署和配对](docs/deployment.zh-CN.md)
+- **打开账号面板。** 选择要操作的电脑后，点 Android 顶部的「账号」，或点网页版右上角独立的「账号」按钮。面板显示该电脑可用的账号和工作区，并读取 Codex 报告的当前工作区订阅。
+- **切换工作区或登录其他账号。** 同一账号下的个人工作区和 Business 工作区可以直接选择并确认。使用其他账号时，点「登录其他账号」，在 OpenAI 官方登录页面输入设备码。登录凭据由电脑上的 Codex 管理。
+- **让 Codex 桌面端应用选择。** 收到提示后点「重启 Codex」并确认。自动重启支持当前用户安装的 Windows 打包版 Codex，重启会中断正在运行的桌面任务。面板确认旧进程退出、新进程启动后才显示完成。自动重启不可用时，可以在电脑上手动退出并重新打开 Codex。
+
+账号管理需要使用本仓库的连接器，以及支持账号和设备码接口的 Codex 版本。
+
+公开发布的 APK 使用独立的签名密钥。如果之前安装了不同签名的版本，Android 会拒绝直接覆盖。遇到这种情况，卸载旧版后安装公开版，再配对一次。卸载会清除 App 的本地设置和配对状态。
 
 ## 功能与亮点
 
