@@ -8,7 +8,7 @@
 .account-dialog-head > div { min-width: 0; }
 .account-dialog-head p {
   margin: 5px 0 0;
-  color: #a0aec3;
+  color: var(--appearance-muted, #a0aec3);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -17,16 +17,16 @@
   flex: none;
   width: 34px;
   height: 34px;
-  border: 1px solid #303b4e;
+  border: 1px solid var(--appearance-border, #303b4e);
   border-radius: 9px;
-  color: #c4d0e1;
-  background: #141c29;
+  color: var(--appearance-text, #c4d0e1);
+  background: var(--appearance-control, #141c29);
   font-size: 20px;
 }
 
 .account-dialog-body p { margin: 0; overflow-wrap: anywhere; }
 .account-dialog-body h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
-.account-dialog-plan { color: #afc5e9; font-size: 12px; }
+.account-dialog-plan { color: var(--appearance-accent, #afc5e9); font-size: 12px; }
 
 .account-dialog-session,
 .account-dialog-status,
@@ -36,12 +36,12 @@
   min-width: 0;
   gap: 8px;
   padding: 12px;
-  border: 1px solid #2b3547;
+  border: 1px solid var(--appearance-border, #2b3547);
   border-radius: 12px;
-  background: #111824;
+  background: var(--appearance-surface, #111824);
 }
 
-.account-dialog-session > p { color: #a0aec3; font-size: 12px; }
+.account-dialog-session > p { color: var(--appearance-muted, #a0aec3); font-size: 12px; }
 .account-dialog-session ul { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .account-dialog-session li {
   display: grid;
@@ -50,11 +50,11 @@
   gap: 8px;
   min-height: 44px;
   padding: 6px 0;
-  border-top: 1px solid #252f40;
+  border-top: 1px solid var(--appearance-border, #252f40);
   font-size: 13px;
 }
 .account-dialog-session li > span { overflow-wrap: anywhere; }
-.account-dialog-session li > strong { color: #a9dfc5; font-size: 11px; white-space: nowrap; }
+.account-dialog-session li > strong { color: var(--appearance-positive, #a9dfc5); font-size: 11px; white-space: nowrap; }
 
 .account-dialog-action {
   display: inline-flex;
@@ -63,22 +63,22 @@
   justify-self: start;
   min-height: 34px;
   padding: 5px 10px;
-  border: 1px solid #395b89;
+  border: 1px solid var(--appearance-border, #395b89);
   border-radius: 8px;
-  color: #e1edff;
-  background: #203b60;
+  color: var(--appearance-text, #e1edff);
+  background: var(--appearance-control, #203b60);
   text-decoration: none;
   font-size: 12px;
 }
-.account-dialog-action:hover:not(:disabled) { color: #fff; background: #2a4b76; }
+.account-dialog-action:hover:not(:disabled) { color: var(--appearance-text, #fff); background: var(--appearance-control-hover, #2a4b76); }
 .account-dialog-action:disabled { opacity: .5; }
 
 .account-dialog-login code {
   justify-self: start;
   padding: 6px 10px;
   border-radius: 8px;
-  color: #edf3fc;
-  background: #0a101a;
+  color: var(--appearance-text, #edf3fc);
+  background: var(--appearance-field, #0a101a);
   font-size: 20px;
   overflow-wrap: anywhere;
   user-select: all;

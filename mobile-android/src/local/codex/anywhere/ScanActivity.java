@@ -2,7 +2,33 @@ package local.codex.anywhere;
 import android.app.*;import android.os.*;import android.content.*;import android.content.pm.PackageManager;import android.hardware.Camera;import android.view.*;import android.widget.*;import com.google.zxing.*;import com.google.zxing.qrcode.QRCodeReader;import com.google.zxing.common.HybridBinarizer;import java.util.*;
 public class ScanActivity extends Activity implements SurfaceHolder.Callback,Camera.PreviewCallback {
  Camera camera;SurfaceView preview;TextView hint;boolean busy=false,done=false;java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();long last=0;
- public void onCreate(Bundle b){super.onCreate(b);LinearLayout root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(0xff101b2b);hint=new TextView(this);hint.setText("将配对二维码放入取景框\n识别在手机本地完成");hint.setTextColor(-1);hint.setTextSize(18);hint.setPadding(24,32,24,24);root.addView(hint);preview=new SurfaceView(this);root.addView(preview,new LinearLayout.LayoutParams(-1,0,1));Button cancel=new Button(this);cancel.setText("取消扫码");cancel.setOnClickListener(v->finish());root.addView(cancel);setContentView(root);preview.getHolder().addCallback(this);if(checkSelfPermission(android.Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{android.Manifest.permission.CAMERA},7);}
+ @Override public void onCreate(Bundle state) {
+   super.onCreate(state);
+   AppPalette palette = AppPalette.read(this);
+   palette.applySystemBars(getWindow());
+   LinearLayout root = new LinearLayout(this);
+   root.setOrientation(LinearLayout.VERTICAL);
+   root.setBackgroundColor(palette.dialogEnd);
+   hint = new TextView(this);
+   hint.setText("将配对二维码放入取景框\n识别在手机本地完成");
+   hint.setTextColor(palette.text);
+   hint.setTextSize(18);
+   hint.setPadding(24, 32, 24, 24);
+   root.addView(hint);
+   preview = new SurfaceView(this);
+   root.addView(preview, new LinearLayout.LayoutParams(-1, 0, 1));
+   Button cancel = new Button(this);
+   cancel.setText("取消扫码");
+   cancel.setTextColor(palette.text);
+   cancel.setBackgroundTintList(android.content.res.ColorStateList.valueOf(palette.buttonSurface));
+   cancel.setOnClickListener(view -> finish());
+   root.addView(cancel);
+   setContentView(root);
+   preview.getHolder().addCallback(this);
+   if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+     requestPermissions(new String[]{android.Manifest.permission.CAMERA}, 7);
+   }
+ }
  public void onRequestPermissionsResult(int r,String[] p,int[] g){super.onRequestPermissionsResult(r,p,g);if(r==7){if(g.length>0&&g[0]==PackageManager.PERMISSION_GRANTED)open();else{Toast.makeText(this,"未开启相机权限，仍可粘贴配对链接",1).show();finish();}}}
  void open(){if(camera!=null||done||!preview.getHolder().getSurface().isValid()||checkSelfPermission(android.Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)return;try{camera=Camera.open();Camera.Parameters p=camera.getParameters();List<String> modes=p.getSupportedFocusModes();if(modes!=null&&modes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE))p.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);Camera.Size chosen=p.getPreviewSize();for(Camera.Size sz:p.getSupportedPreviewSizes())if(sz.width>=640&&sz.width<=1280){chosen=sz;break;}p.setPreviewSize(chosen.width,chosen.height);camera.setParameters(p);Camera.CameraInfo info=new Camera.CameraInfo();Camera.getCameraInfo(0,info);int rotation=getWindowManager().getDefaultDisplay().getRotation()*90;camera.setDisplayOrientation((info.orientation-rotation+360)%360);camera.setPreviewDisplay(preview.getHolder());camera.setPreviewCallback(this);camera.startPreview();}catch(Exception e){release();hint.setText("无法打开相机，请返回使用粘贴链接，或检查相机权限。");}}
  public void onPreviewFrame(byte[] data,Camera c){if(busy||done||System.currentTimeMillis()-last<300)return;busy=true;last=System.currentTimeMillis();Camera.Size size=c.getParameters().getPreviewSize();byte[] bytes=data.clone();worker.execute(()->{try{QRCodeReader reader=new QRCodeReader();Result result=reader.decode(new BinaryBitmap(new HybridBinarizer(new PlanarYUVLuminanceSource(bytes,size.width,size.height,0,0,size.width,size.height,false))));String value=result.getText();android.net.Uri uri=android.net.Uri.parse(value);if(!"https".equals(uri.getScheme())||uri.getHost()==null||uri.getUserInfo()!=null||uri.getFragment()==null||!uri.getFragment().matches("pair=v1\\.[A-Za-z0-9_-]{16}\\.[A-Za-z0-9_-]{43}"))return;runOnUiThread(()->{if(done)return;done=true;setResult(RESULT_OK,new Intent().putExtra("pairing",value));release();finish();});}catch(Exception ignored){}finally{busy=false;}});}

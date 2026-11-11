@@ -1,10 +1,14 @@
-# Codex Anywhere Android 0.6.2
+# Codex Anywhere Android 0.6.3
 
 面向自托管 Codex Anywhere 中继的非官方 Android 客户端。原生 Java 界面负责设备选择、会话列表、文字记录、草稿、请求状态和权限选择；本地打包的 JavaScript 模块负责设备认证、WebSocket 和端到端加密。不可见的 WebView 仅加载固定的本地协议资源，不加载远程聊天页面。
 
-[下载 Android APK v0.6.2](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.2/CodexAnywhere-0.6.2.apk) · [发布说明](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.2)
+[下载 Android APK v0.6.3](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.3/CodexAnywhere-0.6.3.apk) · [发布说明](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.3)
 
 公开版 APK 使用独立的签名密钥。如果 Android 因签名不同拒绝覆盖更新，请卸载旧版后安装公开版，再重新配对。卸载会清除 App 的本地设置和配对状态。
+
+## 日间与夜间模式
+
+点顶部太阳／月亮开关切换主题。太阳在左侧代表日间，月亮在右侧代表夜间。切换配色会应用到会话、输入区和弹窗，重新打开 App 时会恢复上次的选择。
 
 ## 会话同步
 
@@ -44,7 +48,7 @@
 
 Windows 上运行 powershell -ExecutionPolicy Bypass -File build.ps1。依赖 JDK 21、Android SDK platform/build-tools 35、libs/zxing-core-3.5.3.jar。修改协议模块后须先通过 esbuild 打包 engine/protocol.ts 至 assets/protocol.js。
 
-产物为 out/CodexAnywhere-0.6.2.apk。本地开发签名位于 out/development.jks，须保留以便覆盖更新，不要发布该密钥。
+产物为 out/CodexAnywhere-0.6.3.apk。本地开发签名位于 out/development.jks，须保留以便覆盖更新，不要发布该密钥。
 
 历史消息加载和前台自动同步已在 Android 16 上验证。消息发送状态、历史解析和连接恢复有独立测试。
 

@@ -1,5 +1,7 @@
-$page-bg: #080b12;
-$panel-divider: #202735;
+@use 'appearance';
+
+$page-bg: appearance.pair(#080b12, #f4f7fc);
+$panel-divider: appearance.pair(#202735, #d6dfec);
 $content-width: 860px;
 $mobile-breakpoint: 760px;
 $success: #39c979;

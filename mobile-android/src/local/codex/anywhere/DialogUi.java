@@ -27,14 +27,20 @@ import android.widget.TextView;
 
 /** Shared native popup surfaces; owns presentation only, never requests or credentials. */
 final class DialogUi {
-    static final int TEXT = 0xffe4ebf4;
-    static final int MUTED = 0xffaebbd1;
-    static final int ACCENT = 0xffc8b2ea;
-    static final int BORDER = 0xff39495f;
     private final Activity activity;
+    private AppPalette palette;
 
-    DialogUi(Activity activity) {
+    DialogUi(Activity activity, AppPalette palette) {
         this.activity = activity;
+        this.palette = palette;
+    }
+
+    void setPalette(AppPalette palette) {
+        this.palette = palette;
+    }
+
+    int accentColor() {
+        return palette.accent;
     }
 
     Sheet create(String eyebrow, String title, String description) {
@@ -46,7 +52,7 @@ final class DialogUi {
     }
 
     TextView label(String value) {
-        TextView label = text(value, 12, MUTED);
+        TextView label = text(value, 12, palette.muted);
         label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-1, -2);
         layout.bottomMargin = dp(8);
@@ -56,10 +62,10 @@ final class DialogUi {
 
     EditText field(String hint, String value, boolean multi) {
         EditText input = new EditText(activity);
-        input.setTextColor(TEXT);
-        input.setHintTextColor(0xff8596ad);
+        input.setTextColor(palette.text);
+        input.setHintTextColor(palette.hint);
         input.setTextSize(15);
-        input.setHighlightColor(0x55c8b2ea);
+        input.setHighlightColor(palette.highlight);
         input.setPadding(dp(14), dp(13), dp(14), dp(13));
         input.setMinHeight(dp(52));
         input.setSingleLine(!multi);
@@ -73,11 +79,11 @@ final class DialogUi {
         }
         input.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         StateListDrawable background = new StateListDrawable();
-        background.addState(new int[]{android.R.attr.state_focused}, rounded(0xff1b2a40, ACCENT, 14));
-        background.addState(new int[]{}, rounded(0xff111e30, BORDER, 14));
+        background.addState(new int[]{android.R.attr.state_focused}, rounded(palette.focusedSurface, palette.accent, 14));
+        background.addState(new int[]{}, rounded(palette.inputSurface, palette.border, 14));
         input.setBackground(background);
         if (Build.VERSION.SDK_INT >= 29) {
-            GradientDrawable cursor = rounded(ACCENT, Color.TRANSPARENT, 1);
+            GradientDrawable cursor = rounded(palette.accent, Color.TRANSPARENT, 1);
             cursor.setSize(dp(2), dp(24));
             input.setTextCursorDrawable(cursor);
         }
@@ -96,20 +102,20 @@ final class DialogUi {
         card.setPadding(dp(16), dp(15), dp(16), dp(15));
         card.setMinimumHeight(dp(76));
         card.setSelected(selected);
-        card.setBackground(ripple(rounded(selected ? 0xff302d45 : 0xff1b2a3f,
-                selected ? ACCENT : BORDER, 17), 17));
+        card.setBackground(ripple(rounded(selected ? palette.selectedSurface : palette.cardSurface,
+                selected ? palette.accent : palette.border, 17), 17));
         LinearLayout.LayoutParams cardLayout = new LinearLayout.LayoutParams(-1, -2);
         cardLayout.bottomMargin = dp(10);
         card.setLayoutParams(cardLayout);
 
         LinearLayout copy = new LinearLayout(activity);
         copy.setOrientation(LinearLayout.VERTICAL);
-        TextView heading = text(title, 15, TEXT);
+        TextView heading = text(title, 15, palette.text);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         copy.addView(heading, new LinearLayout.LayoutParams(-1, -2));
         if (subtitle != null && !subtitle.isEmpty()) {
-            TextView detail = text(subtitle, 12, selected ? 0xffc7bdd8 : MUTED);
+            TextView detail = text(subtitle, 12, selected ? palette.selectedMuted : palette.muted);
             detail.setLineSpacing(dp(3), 1f);
             detail.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             LinearLayout.LayoutParams detailLayout = new LinearLayout.LayoutParams(-1, -2);
@@ -117,11 +123,11 @@ final class DialogUi {
             copy.addView(detail, detailLayout);
         }
         card.addView(copy, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView check = text(selected ? "✓" : "", 14, 0xff241b36);
+        TextView check = text(selected ? "✓" : "", 14, palette.onAccent);
         check.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         check.setGravity(Gravity.CENTER);
-        GradientDrawable circle = rounded(selected ? ACCENT : Color.TRANSPARENT,
-                selected ? ACCENT : 0xff617189, 100);
+        GradientDrawable circle = rounded(selected ? palette.accent : Color.TRANSPARENT,
+                selected ? palette.accent : palette.indicatorOutline, 100);
         check.setBackground(circle);
         check.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         LinearLayout.LayoutParams checkLayout = new LinearLayout.LayoutParams(dp(23), dp(23));
@@ -149,7 +155,7 @@ final class DialogUi {
         TextView trailing = (TextView) card.getChildAt(1);
         trailing.setText("›");
         trailing.setTextSize(25);
-        trailing.setTextColor(ACCENT);
+        trailing.setTextColor(palette.accent);
         trailing.setBackground(null);
         card.setAccessibilityDelegate(new View.AccessibilityDelegate() {
             @Override public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
@@ -179,7 +185,7 @@ final class DialogUi {
     }
 
     private Drawable ripple(Drawable content, int radius) {
-        return new RippleDrawable(ColorStateList.valueOf(0x20c8b2ea), content,
+        return new RippleDrawable(ColorStateList.valueOf(palette.ripple), content,
                 rounded(Color.WHITE, Color.TRANSPARENT, radius));
     }
 
@@ -188,14 +194,14 @@ final class DialogUi {
         button.setAllCaps(false);
         button.setTextSize(14);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        button.setTextColor(primary ? 0xff241b36 : TEXT);
+        button.setTextColor(primary ? palette.onAccent : palette.text);
         button.setMinHeight(dp(50));
         button.setMinimumHeight(dp(50));
         button.setMinimumWidth(0);
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
         button.setStateListAnimator(null);
-        button.setBackground(ripple(rounded(primary ? ACCENT : 0xff213047,
-                primary ? ACCENT : BORDER, 14), 14));
+        button.setBackground(ripple(rounded(primary ? palette.accent : palette.buttonSurface,
+                primary ? palette.accent : palette.border, 14), 14));
         return button;
     }
 
@@ -234,13 +240,13 @@ final class DialogUi {
             panel.setPadding(dp(22), dp(12), dp(22), dp(20));
             panel.setFocusableInTouchMode(true);
             GradientDrawable panelSurface = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    new int[]{0xff19283d, 0xff101b2b});
+                    new int[]{palette.dialogStart, palette.dialogEnd});
             panelSurface.setCornerRadius(dp(26));
-            panelSurface.setStroke(dp(1), BORDER);
+            panelSurface.setStroke(dp(1), palette.border);
             panel.setBackground(panelSurface);
 
             View handle = new View(activity);
-            handle.setBackground(rounded(0xff506078, Color.TRANSPARENT, 4));
+            handle.setBackground(rounded(palette.sheetHandle, Color.TRANSPARENT, 4));
             LinearLayout.LayoutParams handleLayout = new LinearLayout.LayoutParams(dp(34), dp(4));
             handleLayout.gravity = Gravity.CENTER_HORIZONTAL;
             handleLayout.bottomMargin = dp(20);
@@ -251,14 +257,14 @@ final class DialogUi {
             LinearLayout titles = new LinearLayout(activity);
             titles.setOrientation(LinearLayout.VERTICAL);
             if (eyebrow != null && !eyebrow.isEmpty()) {
-                TextView small = text(eyebrow, 10, ACCENT);
+                TextView small = text(eyebrow, 10, palette.accent);
                 small.setLetterSpacing(.16f);
                 small.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
                 LinearLayout.LayoutParams smallLayout = new LinearLayout.LayoutParams(-1, -2);
                 smallLayout.bottomMargin = dp(9);
                 titles.addView(small, smallLayout);
             }
-            TextView heading = text(title, 23, TEXT);
+            TextView heading = text(title, 23, palette.text);
             heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             heading.setLineSpacing(dp(3), 1f);
             if (Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
@@ -279,7 +285,7 @@ final class DialogUi {
             panel.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
             if (description != null && !description.isEmpty()) {
-                TextView descriptionView = text(description, 13, MUTED);
+                TextView descriptionView = text(description, 13, palette.muted);
                 descriptionView.setLineSpacing(dp(4), 1f);
                 LinearLayout.LayoutParams descriptionLayout = new LinearLayout.LayoutParams(-1, -2);
                 descriptionLayout.topMargin = dp(12);
@@ -298,11 +304,11 @@ final class DialogUi {
             scrollLayout.topMargin = dp(22);
             panel.addView(scroller, scrollLayout);
 
-            error = text("", 12, 0xffedb5bd);
+            error = text("", 12, palette.error);
             error.setLineSpacing(dp(3), 1f);
             error.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
             error.setPadding(dp(12), dp(10), dp(12), dp(10));
-            error.setBackground(rounded(0x303d263b, 0x604f3c54, 12));
+            error.setBackground(rounded(palette.errorSurface, palette.errorBorder, 12));
             error.setVisibility(View.GONE);
             LinearLayout.LayoutParams errorLayout = new LinearLayout.LayoutParams(-1, -2);
             errorLayout.topMargin = dp(10);

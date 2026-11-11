@@ -1,5 +1,5 @@
 package local.codex.anywhere;
-import android.app.*;import android.os.*;import android.content.*;import android.graphics.Color;import android.webkit.*;import android.widget.*;import android.view.*;import org.json.*;import java.util.*;import java.io.*;
+import android.app.*;import android.os.*;import android.content.*;import android.webkit.*;import android.widget.*;import android.view.*;import org.json.*;import java.util.*;import java.io.*;
 public class MainActivity extends Activity {
 
  final Handler syncHandler=new Handler(android.os.Looper.getMainLooper());
@@ -18,9 +18,195 @@ public class MainActivity extends Activity {
  long historyReadStartedAt=0,historyPollAt=0;
  final Runnable historyPoll=()->{historyPollAt=0;readHistory(false);};
  JSONObject permissionConfig;Map<String,String> requestThreads=new HashMap<>();JSONArray sessionCatalog=new JSONArray();Dialog sessionDrawer;LinearLayout sessionRows;Button deviceButton;String scannedPair="";DialogUi popupUi;DialogUi.Sheet connectionDialog;String selectedDeviceId="", connectionServerDraft="", connectionPairDraft="";String pendingPairCredential=null;boolean connectionBusy=false, engineLoaded=false, connectAfterLoad=true;Runnable completeConnection;int connectionAttempt=0;WebView engine; LinearLayout root,body;TextView status;EditText draft;String server,thread="";boolean ready=false;int generation=0;long lastRefresh=0;Map<String,String> pending=new HashMap<>();android.content.SharedPreferences prefs;
- public void onCreate(Bundle b){super.onCreate(b);popupUi=new DialogUi(this);accounts=new AccountUi(this,popupUi,(action,payload)->{if(!ready)throw new IllegalStateException("computer_not_connected");call(action,payload);});prefs=getPreferences(0);selectedDeviceId=prefs.getString("selectedDevice","");thread=prefs.getString("thread:"+selectedDeviceId,"");conversationTitle=prefs.getString("title:"+selectedDeviceId,"");server=prefs.getString("server","");root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(18),dp(12),dp(18),dp(12));root.setBackground(new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR,new int[]{0xff192336,0xff0a121f}));setContentView(root);getWindow().setStatusBarColor(Color.rgb(25,35,54));LinearLayout bar=new LinearLayout(this);TextView title=text("Codex",19);bar.addView(title,new LinearLayout.LayoutParams(0,dp(64),1));deviceButton=button(selectedDeviceId.isEmpty()?"选择设备 ▾":prefs.getString("deviceName:"+selectedDeviceId,"选择设备")+" ▾",()->devices());bar.addView(deviceButton);Button settings=button("连接",()->connection());bar.addView(settings);root.addView(bar);status=text("请连接服务器并选择电脑",13);status.setTextColor(0xffb4c2d2);status.setBackground(surface(0x402b3c54,14));root.addView(status);LinearLayout tools=new LinearLayout(this);addTool(tools,"☰ 会话",()->openSessions());addTool(tools,"权限",()->readPermissions());addTool(tools,"账号",()->{if(ready)accounts.open();else notice("请先连接电脑");});addTool(tools,"刷新",()->refresh());addTool(tools,"停止",()->{if(!thread.isEmpty())try{call("turn.stop",new JSONObject().put("threadId",thread));}catch(Exception ex){}});tools.setPadding(0,dp(12),0,dp(12));root.addView(tools);ScrollView scroll=new ScrollView(this);historyScroll=scroll;body=new LinearLayout(this);body.setOrientation(1);scroll.addView(body);body.setContentDescription("会话消息区域");root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));draft=new EditText(this);draft.setTextColor(Color.WHITE);draft.setHintTextColor(Color.GRAY);draft.setHint("写下你的想法…");draft.setMinLines(2);draft.setTextSize(15);draft.setPadding(dp(16),dp(12),dp(16),dp(12));draft.setBackground(surface(0xff1c2b40,18));root.addView(draft);Button send=button("发送指令  ↗",()->submit());sendButton=send;send.setBackground(surface(0xffc8b2ea,16));send.setTextColor(0xff241b36);root.addView(send,new LinearLayout.LayoutParams(-1,dp(56)));body.addView(text("随时继续你的工作",25));body.addView(text("连接电脑，查看会话与跟进任务",14));
+ private AppPalette palette;
+ private TextView appTitle;
+ private Button connectionButton;
+ private LinearLayout mainTools;
+
+ @Override public void onCreate(Bundle b) {
+   super.onCreate(b);
+   palette = AppPalette.read(this);
+   popupUi = new DialogUi(this, palette);
+   accounts = new AccountUi(this, popupUi, (action, payload) -> {
+     if (!ready) throw new IllegalStateException("computer_not_connected");
+     call(action, payload);
+   });
+   prefs = getPreferences(0);
+   selectedDeviceId = prefs.getString("selectedDevice", "");
+   thread = prefs.getString("thread:" + selectedDeviceId, "");
+   conversationTitle = prefs.getString("title:" + selectedDeviceId, "");
+   server=prefs.getString("server","");
+
+   root = new LinearLayout(this);
+   root.setOrientation(LinearLayout.VERTICAL);
+   root.setPadding(dp(18), dp(12), dp(18), dp(12));
+   setContentView(root);
+
+   LinearLayout bar = new LinearLayout(this);
+   bar.setGravity(Gravity.CENTER_VERTICAL);
+   appTitle = text("Codex", 19);
+   appTitle.setTextIsSelectable(false);
+   appTitle.setPadding(dp(6), dp(12), dp(8), dp(12));
+   bar.addView(appTitle, new LinearLayout.LayoutParams(-2, dp(64)));
+   deviceButton = button(selectedDeviceId.isEmpty() ? "选择设备 ▾"
+       : prefs.getString("deviceName:" + selectedDeviceId, "选择设备") + " ▾", this::devices);
+   deviceButton.setSingleLine();
+   deviceButton.setEllipsize(android.text.TextUtils.TruncateAt.END);
+   deviceButton.setMinWidth(0);
+   LinearLayout.LayoutParams deviceLayout = (LinearLayout.LayoutParams) deviceButton.getLayoutParams();
+   deviceLayout.width = 0;
+   deviceLayout.weight = 1f;
+   bar.addView(deviceButton);
+   connectionButton = button("连接", this::connection);
+   bar.addView(connectionButton);
+   ThemeSwitch themeSwitch = new ThemeSwitch(this, palette.day, day -> {
+     AppPalette choice = day ? AppPalette.DAY : AppPalette.NIGHT;
+     choice.save(this);
+     applyPalette(choice);
+   });
+   bar.addView(themeSwitch, new LinearLayout.LayoutParams(dp(76), dp(48)));
+   root.addView(bar);
+
+   status = text("请连接服务器并选择电脑", 13);
+   root.addView(status);
+   mainTools = new LinearLayout(this);
+   addTool(mainTools, "☰ 会话", this::openSessions);
+   addTool(mainTools, "权限", this::readPermissions);
+   addTool(mainTools, "账号", () -> {
+     if (ready) accounts.open();
+     else notice("请先连接电脑");
+   });
+   addTool(mainTools, "刷新", this::refresh);
+   addTool(mainTools, "停止", () -> {
+     if (!thread.isEmpty()) {
+       try { call("turn.stop", new JSONObject().put("threadId", thread)); }
+       catch (JSONException ignored) {}
+     }
+   });
+   mainTools.setPadding(0, dp(12), 0, dp(12));
+   root.addView(mainTools);
+
+   historyScroll = new ScrollView(this);
+   body = new LinearLayout(this);
+   body.setOrientation(LinearLayout.VERTICAL);
+   historyScroll.addView(body);
+   body.setContentDescription("会话消息区域");
+   root.addView(historyScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+   draft = new EditText(this);
+   draft.setHint("写下你的想法…");
+   draft.setMinLines(2);
+   draft.setTextSize(15);
+   draft.setPadding(dp(16), dp(12), dp(16), dp(12));
+   root.addView(draft);
+   sendButton = button("发送指令  ↗", this::submit);
+   root.addView(sendButton, new LinearLayout.LayoutParams(-1, dp(56)));
+   body.addView(text("随时继续你的工作", 25));
+   body.addView(text("连接电脑，查看会话与跟进任务", 14));
+   applyPalette(palette);
+
  engine=new WebView(this);engine.getSettings().setJavaScriptEnabled(true);engine.getSettings().setAllowFileAccess(false);engine.getSettings().setAllowContentAccess(false);engine.addJavascriptInterface(new Bridge(),"Native");engine.setWebViewClient(new WebViewClient(){public WebResourceResponse shouldInterceptRequest(WebView w,WebResourceRequest r){String path=r.getUrl().getPath();if(path==null||!path.startsWith("/__native/"))return new WebResourceResponse("text/plain","UTF-8",403,"Forbidden",null,new ByteArrayInputStream(new byte[0]));try{return new WebResourceResponse(path.endsWith(".js")?"application/javascript":"text/html","UTF-8",getAssets().open(path.endsWith(".js")?"protocol.js":"engine.html"));}catch(Exception e){return null;}}public boolean shouldOverrideUrlLoading(WebView w,WebResourceRequest r){return true;}public void onPageFinished(WebView w,String u){engineLoaded=true;js("setForeground("+foreground+")");if(!connectAfterLoad)return;connectAfterLoad=false;if(server.isEmpty())return;String pair=pendingPairCredential;pendingPairCredential=null;if(pair==null)pair=getIntent().getStringExtra("pairing");getIntent().removeExtra("pairing");js("connect("+JSONObject.quote(server)+","+JSONObject.quote(pair==null?"":pair)+")");}});engine.loadUrl((server.isEmpty()?"https://appassets.androidplatform.net":server.replaceAll("/+$",""))+"/__native/engine.html");}
- int dp(int v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}android.graphics.drawable.GradientDrawable surface(int c,int r){android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();d.setColor(c);d.setCornerRadius(dp(r));d.setStroke(dp(1),0x408699b5);return d;}TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextColor(Color.WHITE);t.setTextSize(size);t.setPadding(dp(12),dp(12),dp(12),dp(12));t.setLineSpacing(dp(4),1);t.setTextIsSelectable(true);return t;}Button button(String s,Runnable action){Button b=new Button(this);b.setText(s);b.setTextColor(0xffe4ebf4);b.setTextSize(13);b.setAllCaps(false);b.setMinHeight(dp(48));b.setMinimumWidth(0);b.setPadding(dp(12),dp(10),dp(12),dp(10));b.setBackground(surface(0x502f4059,14));b.setStateListAnimator(null);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2);lp.setMargins(dp(3),dp(5),dp(3),dp(5));b.setLayoutParams(lp);b.setOnClickListener(v->action.run());return b;}void js(String code){engine.evaluateJavascript(code,null);}void notice(String s){if(!s.contentEquals(status.getText()))status.setText(s);}JSONArray inventory=new JSONArray();
+ int dp(int value) {
+   return Math.round(value * getResources().getDisplayMetrics().density);
+ }
+
+ private android.graphics.drawable.GradientDrawable surface(int color, int radius) {
+   android.graphics.drawable.GradientDrawable shape = new android.graphics.drawable.GradientDrawable();
+   shape.setColor(color);
+   shape.setCornerRadius(dp(radius));
+   shape.setStroke(dp(1), palette.softBorder);
+   return shape;
+ }
+
+ private TextView text(String value, int size) {
+   TextView view = new TextView(this);
+   view.setText(value);
+   view.setTextSize(size);
+   view.setPadding(dp(12), dp(12), dp(12), dp(12));
+   view.setLineSpacing(dp(4), 1f);
+   view.setTextIsSelectable(true);
+   colorHistory(view);
+   return view;
+ }
+
+ private Button button(String label, Runnable action) {
+   Button view = new Button(this);
+   view.setText(label);
+   view.setTextSize(13);
+   view.setAllCaps(false);
+   view.setMinHeight(dp(48));
+   view.setMinimumWidth(0);
+   view.setPadding(dp(12), dp(10), dp(12), dp(10));
+   view.setStateListAnimator(null);
+   LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-2, -2);
+   layout.setMargins(dp(3), dp(5), dp(3), dp(5));
+   view.setLayoutParams(layout);
+   view.setOnClickListener(ignored -> action.run());
+   styleButton(view);
+   return view;
+ }
+
+ private void styleButton(Button view) {
+   view.setTextColor(palette.text);
+   view.setBackground(surface(palette.buttonSurface, 14));
+ }
+
+ private void applyPalette(AppPalette choice) {
+   palette = choice;
+   popupUi.setPalette(choice);
+   root.setBackground(new android.graphics.drawable.GradientDrawable(
+       android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+       new int[]{choice.canvasStart, choice.canvasEnd}));
+   choice.applySystemBars(getWindow());
+   colorHistory(appTitle);
+   status.setTextColor(choice.muted);
+   status.setBackground(surface(choice.statusSurface, 14));
+   styleButton(deviceButton);
+   styleButton(connectionButton);
+   for (int i = 0; i < mainTools.getChildCount(); i++) {
+     styleButton((Button) mainTools.getChildAt(i));
+   }
+   draft.setTextColor(choice.text);
+   draft.setHintTextColor(choice.hint);
+   draft.setHighlightColor(choice.highlight);
+   draft.setBackground(surface(choice.inputSurface, 18));
+   if (Build.VERSION.SDK_INT >= 29) {
+     android.graphics.drawable.GradientDrawable cursor = new android.graphics.drawable.GradientDrawable();
+     cursor.setColor(choice.accent);
+     cursor.setSize(dp(2), dp(24));
+     draft.setTextCursorDrawable(cursor);
+   }
+   sendButton.setBackground(surface(choice.accent, 16));
+   sendButton.setTextColor(choice.onAccent);
+   colorHistory(body);
+ }
+
+ private enum HistoryTone { USER_CARD, ASSISTANT_CARD, MUTED, ACCENT, ERROR }
+
+ private void colorHistory(View view) {
+   Object tone = view.getTag();
+   if (view instanceof TextView) {
+     TextView label = (TextView) view;
+     int color = tone == HistoryTone.MUTED ? palette.muted
+         : tone == HistoryTone.ACCENT ? palette.accent
+         : tone == HistoryTone.ERROR ? palette.error : palette.text;
+     label.setTextColor(color);
+     label.setHighlightColor(palette.highlight);
+   }
+   if (tone == HistoryTone.USER_CARD || tone == HistoryTone.ASSISTANT_CARD) {
+     view.setBackground(surface(tone == HistoryTone.USER_CARD
+         ? palette.selectedSurface : palette.cardSurface, 16));
+   }
+   if (view instanceof ViewGroup) {
+     ViewGroup container = (ViewGroup) view;
+     for (int i = 0; i < container.getChildCount(); i++) colorHistory(container.getChildAt(i));
+   }
+ }
+
+ void js(String code){engine.evaluateJavascript(code,null);}
+ void notice(String s){if(!s.contentEquals(status.getText()))status.setText(s);}
+ JSONArray inventory=new JSONArray();
+
  class Bridge {@JavascriptInterface public String identity(){return prefs.getString("identity","");}@JavascriptInterface public void saveIdentity(String s){prefs.edit().putString("identity",s).apply();}@JavascriptInterface public void emit(String s){runOnUiThread(()->event(s));}}
 
  void event(String raw) {
@@ -262,8 +448,8 @@ public class MainActivity extends Activity {
  }
 
  void showSessions(JSONArray sessions){sessionCatalog=sessions==null?new JSONArray():sessions;if(sessionDrawer!=null&&sessionDrawer.isShowing())filterSessions("");}
- void openSessions(){sessionDrawer=new Dialog(this);LinearLayout panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(dp(16),dp(20),dp(16),dp(16));panel.setBackgroundColor(0xff162337);LinearLayout heading=new LinearLayout(this);TextView label=text("工作会话",23);heading.addView(label,new LinearLayout.LayoutParams(0,-2,1));heading.addView(button("关闭",()->sessionDrawer.dismiss()));panel.addView(heading);EditText search=new EditText(this);search.setSingleLine(true);search.setTextColor(-1);search.setHintTextColor(0xffaebbd1);search.setHint("搜索会话");panel.addView(search);ScrollView list=new ScrollView(this);sessionRows=new LinearLayout(this);sessionRows.setOrientation(1);list.addView(sessionRows);panel.addView(list,new LinearLayout.LayoutParams(-1,0,1));panel.addView(button("刷新列表",()->call("sessions.list",new JSONObject())));search.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence v,int st,int c,int after){}public void onTextChanged(CharSequence v,int st,int before,int count){filterSessions(v.toString());}public void afterTextChanged(android.text.Editable e){}});sessionDrawer.setContentView(panel);Window w=sessionDrawer.getWindow();if(w!=null){w.setBackgroundDrawableResource(android.R.color.transparent);w.setGravity(Gravity.LEFT|Gravity.TOP);w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);WindowManager.LayoutParams attrs=w.getAttributes();attrs.dimAmount=.55f;w.setAttributes(attrs);}sessionDrawer.show();if(w!=null)w.setLayout((int)(getResources().getDisplayMetrics().widthPixels*.86),-1);filterSessions("");if(ready)call("sessions.list",new JSONObject());}
- void filterSessions(String query){if(sessionRows==null)return;sessionRows.removeAllViews();String q=query.toLowerCase(java.util.Locale.ROOT);int count=0;for(int i=0;i<sessionCatalog.length();i++){JSONObject item=sessionCatalog.optJSONObject(i);if(item==null)continue;String name=item.optString("name",item.optString("title",item.optString("id")));if(!name.toLowerCase(java.util.Locale.ROOT).contains(q))continue;count++;Button row=button(name,()->{openConversation(item);sessionDrawer.dismiss();});row.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);row.setMaxLines(2);if(item.optString("id").equals(thread))row.setBackground(surface(0xff55476b,14));sessionRows.addView(row,new LinearLayout.LayoutParams(-1,-2));}if(count==0)sessionRows.addView(text(ready?"暂无匹配会话":"连接电脑后显示会话",14));}
+ void openSessions(){sessionDrawer=new Dialog(this);LinearLayout panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(dp(16),dp(20),dp(16),dp(16));panel.setBackgroundColor(palette.sidebarSurface);LinearLayout heading=new LinearLayout(this);TextView label=text("工作会话",23);heading.addView(label,new LinearLayout.LayoutParams(0,-2,1));heading.addView(button("关闭",()->sessionDrawer.dismiss()));panel.addView(heading);EditText search=new EditText(this);search.setSingleLine(true);search.setTextColor(palette.text);search.setHintTextColor(palette.hint);search.setHighlightColor(palette.highlight);search.setBackgroundTintList(android.content.res.ColorStateList.valueOf(palette.border));search.setHint("搜索会话");panel.addView(search);ScrollView list=new ScrollView(this);sessionRows=new LinearLayout(this);sessionRows.setOrientation(1);list.addView(sessionRows);panel.addView(list,new LinearLayout.LayoutParams(-1,0,1));panel.addView(button("刷新列表",()->call("sessions.list",new JSONObject())));search.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence v,int st,int c,int after){}public void onTextChanged(CharSequence v,int st,int before,int count){filterSessions(v.toString());}public void afterTextChanged(android.text.Editable e){}});sessionDrawer.setContentView(panel);Window w=sessionDrawer.getWindow();if(w!=null){w.setBackgroundDrawableResource(android.R.color.transparent);w.setGravity(Gravity.LEFT|Gravity.TOP);w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);WindowManager.LayoutParams attrs=w.getAttributes();attrs.dimAmount=.55f;w.setAttributes(attrs);}sessionDrawer.show();if(w!=null)w.setLayout((int)(getResources().getDisplayMetrics().widthPixels*.86),-1);filterSessions("");if(ready)call("sessions.list",new JSONObject());}
+ void filterSessions(String query){if(sessionRows==null)return;sessionRows.removeAllViews();String q=query.toLowerCase(java.util.Locale.ROOT);int count=0;for(int i=0;i<sessionCatalog.length();i++){JSONObject item=sessionCatalog.optJSONObject(i);if(item==null)continue;String name=item.optString("name",item.optString("title",item.optString("id")));if(!name.toLowerCase(java.util.Locale.ROOT).contains(q))continue;count++;Button row=button(name,()->{openConversation(item);sessionDrawer.dismiss();});row.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);row.setMaxLines(2);if(item.optString("id").equals(thread))row.setBackground(surface(palette.selectedSurface,14));sessionRows.addView(row,new LinearLayout.LayoutParams(-1,-2));}if(count==0)sessionRows.addView(text(ready?"暂无匹配会话":"连接电脑后显示会话",14));}
 
  String permissionName(String mode){return "full".equals(mode)?"完全访问":"auto".equals(mode)?"自动审核":"ask".equals(mode)?"需要审批":"自定义权限";}
  void readPermissions(){if(thread.isEmpty()){notice("请先在侧边栏选择会话");return;}try{notice("正在读取当前会话权限…");call("session.permissions.read",new JSONObject().put("threadId",thread));}catch(Exception ex){notice("权限读取失败");}}
@@ -427,11 +613,12 @@ public class MainActivity extends Activity {
    if(value==null||value.isEmpty())return;
    LinearLayout card=new LinearLayout(this);card.setOrientation(1);
    boolean user=kind.equals("user");
-   card.setBackground(surface(user?0xff302d45:0xff1a293c,16));
+   card.setTag(user ? HistoryTone.USER_CARD : HistoryTone.ASSISTANT_CARD);
    TextView role=text(user?"你":kind.equals("assistant")?"Codex":kind.equals("progress")?"任务进度":"会话提示",12);
-   role.setTextColor(user?0xffc8b2ea:0xffaebbd1);card.addView(role);
+   role.setTag(user ? HistoryTone.ACCENT : HistoryTone.MUTED);card.addView(role);
    card.addView(text(value,16));
-   if(!state.isEmpty()){TextView badge=text(state,12);badge.setTextColor(state.startsWith("发送失败")?0xffedb5bd:0xffaebbd1);card.addView(badge);}
+   if(!state.isEmpty()){TextView badge=text(state,12);badge.setTag(state.startsWith("发送失败") ? HistoryTone.ERROR : HistoryTone.MUTED);card.addView(badge);}
+   colorHistory(card);
    LinearLayout.LayoutParams layout=new LinearLayout.LayoutParams(-1,-2);layout.setMargins(user?dp(18):0,dp(8),user?0:dp(12),dp(8));body.addView(card,layout);
  }
 

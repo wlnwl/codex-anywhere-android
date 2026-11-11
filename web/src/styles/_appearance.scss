@@ -1,0 +1,87 @@
+@use 'sass:color';
+@use 'sass:list';
+@use 'sass:map';
+@use 'sass:math';
+
+// Retain the original night colors as fallbacks. The day palette uses the
+// same hues with different lightness ranges for surfaces, text, and outlines.
+$day-colors: ();
+
+@function pair($night, $day) {
+  $key: ($night, $day);
+  $name: map.get($day-colors, $key);
+  @if $name == null {
+    $name: --ca-day-#{list.length(map.keys($day-colors)) + 1};
+    $day-colors: map.set($day-colors, $key, $name) !global;
+  }
+  @return var(#{$name}, #{$night});
+}
+
+@function surface($night) {
+  $lightness: color.channel($night, 'lightness', $space: hsl);
+  $saturation: color.channel($night, 'saturation', $space: hsl);
+  $alpha: color.alpha($night);
+  @if $alpha < 1 and $lightness < 4% { @return $night; }
+  @if $alpha < 1 and $lightness > 86% {
+    @return pair($night, rgba(52, 76, 116, math.min($alpha, .12)));
+  }
+  // Saturated action backgrounds keep white text in both themes.
+  @if $lightness >= 38% { @return $night; }
+  $day: color.change($night,
+    $lightness: 99% - $lightness * .43,
+    $saturation: math.clamp(24%, $saturation, 58%),
+    $space: hsl);
+  @return pair($night, $day);
+}
+
+@function text($night) {
+  $lightness: color.channel($night, 'lightness', $space: hsl);
+  $saturation: color.channel($night, 'saturation', $space: hsl);
+  $day: color.change($night,
+    $lightness: math.clamp(19%, 99% - $lightness, 42%),
+    $saturation: math.min(55%, $saturation),
+    $space: hsl);
+  @return pair($night, $day);
+}
+
+@function line($night) {
+  $lightness: color.channel($night, 'lightness', $space: hsl);
+  $saturation: color.channel($night, 'saturation', $space: hsl);
+  $day-lightness: math.clamp(50%, 94% - $lightness * .56, 90%);
+  @if color.alpha($night) < 1 {
+    // Translucent outlines composite over a light surface in day mode.
+    $day-lightness: math.min(45%, $day-lightness);
+  }
+  @return pair($night, color.change($night,
+    $lightness: $day-lightness,
+    $saturation: math.clamp(22%, $saturation, 56%),
+    $space: hsl));
+}
+
+@function shadow($night) {
+  @if color.alpha($night) == 1 { @return $night; }
+  $lightness: color.channel($night, 'lightness', $space: hsl);
+  @if $lightness > 80% { @return $night; }
+  @return pair($night, color.change($night, $alpha: color.alpha($night) * .55));
+}
+
+@mixin day-colors {
+  :root[data-theme='day'] {
+    color-scheme: light;
+    --appearance-text: #25334a;
+    --appearance-muted: #55647c;
+    --appearance-border: #cbd7e8;
+    --appearance-surface: #f4f7fc;
+    --appearance-field: #fff;
+    --appearance-control: #e6efff;
+    --appearance-control-hover: #d7e6ff;
+    --appearance-accent: #294e88;
+    --appearance-positive: #236045;
+    --appearance-positive-surface: #e6f4eb;
+    --appearance-error: #963a35;
+    --muted: #55647c;
+    @each $pair, $name in $day-colors {
+      #{$name}: #{list.nth($pair, 2)};
+    }
+  }
+}

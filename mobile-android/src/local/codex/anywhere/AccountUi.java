@@ -313,7 +313,7 @@ final class AccountUi {
         sheet.content.addView(ui.label("授权成功后更新电脑上的登录，重启 Codex 后生效。"));
         TextView code = ui.label(loginCode);
         code.setTextSize(25);
-        code.setTextColor(DialogUi.ACCENT);
+        code.setTextColor(ui.accentColor());
         code.setTextIsSelectable(true);
         code.setContentDescription("登录验证码 " + loginCode);
         sheet.content.addView(code);

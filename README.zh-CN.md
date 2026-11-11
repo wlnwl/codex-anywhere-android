@@ -4,7 +4,7 @@
 
 此版本在 MIT 许可的 Codex Anywhere 上游项目基础上增加了原生 Android 客户端，以及 Android 和网页端的 Codex 账号管理。下文的上游网页端和中继文档对应 v0.4.5。[查看上游项目](https://github.com/gaotong132/codex-anywhere)
 
-[下载 Android APK v0.6.2](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.2/CodexAnywhere-0.6.2.apk) · [发布说明](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.2) · [安卓版配置与构建](mobile-android/README.md)
+[下载 Android APK v0.6.3](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.3/CodexAnywhere-0.6.3.apk) · [发布说明](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.3) · [安卓版配置与构建](mobile-android/README.md)
 
 文档对应 **v0.4.5（2026-10-22）** · [发布与升级](docs/release-0.4.5.zh-CN.md) · [文档索引](docs/README.zh-CN.md)
 
@@ -25,6 +25,10 @@ Codex Anywhere 专注个人使用场景，会话保存在执行节点上；不�
 
 > [!IMPORTANT]
 > 这是一个非官方社区项目，与 OpenAI 无隶属关系，也未得到 OpenAI 的认可或背书。
+
+## 日间与夜间模式
+
+在安卓版顶部或网页版右上角点击太阳／月亮开关。立体滑块移动时，像素散开并组成新的图案，界面随之切换日间或夜间配色。各端会在本地记住选择，并遵循系统减少动效的设置。
 
 ## Android 与网页端账号管理
 

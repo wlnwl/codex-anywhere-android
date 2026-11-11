@@ -44,6 +44,7 @@ import { useFileTransfer } from './file-transfer';
 import { useFilePreviews } from './file-preview-client';
 import { restoreOwnedTurn } from './owned-turn';
 import { t } from './i18n';
+import { AppearanceToggle } from './appearance-toggle';
 import { adoptDeliveryThread, confirmedDelivery, useDeliveryNotice, visibleDelivery, type MessageDelivery } from './message-delivery';
 import {
   buildQuestionReply, normalizeAsyncQuestions, normalizeQuestionReplies, questionReplyText, type QuestionReply,
@@ -2263,6 +2264,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   if (!authenticated) {
     return (
       <main className="login-shell">
+        <div className="login-appearance"><AppearanceToggle /></div>
         <section className="login-card">
           <div className="brand-mark">C</div>
           <p className="eyebrow">PRIVATE BRIDGE</p>
@@ -2543,6 +2545,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
             </div>
           </div>
           <div className="topbar-actions">
+            <AppearanceToggle />
             <button
               type="button"
               className="account-trigger"

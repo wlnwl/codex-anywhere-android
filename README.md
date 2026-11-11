@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 This distribution adds a native Android client and Codex account controls for Android and Web to the MIT-licensed Codex Anywhere upstream project. The upstream Web and relay documentation below refers to v0.4.5. [Upstream project](https://github.com/gaotong132/codex-anywhere)
 
-[Download Android APK v0.6.2](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.2/CodexAnywhere-0.6.2.apk) · [Release notes](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.2) · [Android setup and build](mobile-android/README.md)
+[Download Android APK v0.6.3](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.3/CodexAnywhere-0.6.3.apk) · [Release notes](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.3) · [Android setup and build](mobile-android/README.md)
 
 Documentation for **v0.4.5 (2026-10-22)** · [Release and upgrade](docs/release-0.4.5.md) · [Documentation index](docs/README.md)
 
@@ -27,6 +27,10 @@ It does not provide multi-user hosting, a general remote shell or automatic sess
 
 > [!IMPORTANT]
 > This is an unofficial community project. It is not affiliated with or endorsed by OpenAI.
+
+## Day and night modes
+
+Use the sun and moon switch in the Android toolbar or at the upper right of the Web page. The raised thumb slides as pixels scatter and form the new icon. The theme applies to the interface and is saved separately on each device or browser. The switch follows the system’s reduced motion setting.
 
 ## Android and Web account controls
 
