@@ -1,0 +1,192 @@
+import {
+  useEffect, useRef, useState, type CSSProperties,
+} from 'react';
+import { friendlyError } from './app-utils';
+import { t } from './i18n';
+import { CustomSelect } from './ui-components';
+import type { ModelConfigDraft, ModelOption, SessionModelConfig } from './app-types';
+import { reasoningEffortLabel, reasoningSliderOptions, reasoningSliderValue } from './model-reasoning';
+
+function fastTierAvailable(model: ModelOption | undefined) {
+  return Boolean(model?.serviceTiers.some((tier) => /(?:fast|priority)/i.test(`${tier.id} ${tier.name}`)));
+}
+
+export function ModelConfigControl({
+  config, loading, disabled, onSave, hasSession = false, onRefresh,
+}: {
+  config: SessionModelConfig | null;
+  loading: boolean;
+  disabled: boolean;
+  onSave: (draft: ModelConfigDraft) => Promise<void>;
+  hasSession?: boolean;
+  onRefresh?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [draft, setDraft] = useState<ModelConfigDraft | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectedModel = config?.models.find((model) => model.model === config.model);
+  const draftModel = config?.models.find((model) => model.model === draft?.model);
+  const effortOptions = reasoningSliderOptions(draftModel);
+  const effortIndex = Math.max(0, effortOptions
+    .findIndex((option) => option.reasoningEffort === draft?.reasoningEffort));
+  const effortProgress = effortOptions.length > 1 ? (effortIndex / (effortOptions.length - 1)) * 100 : 100;
+
+  useEffect(() => {
+    setOpen(false);
+    setError('');
+    if (!config) {
+      setDraft(null);
+      return;
+    }
+    const model = config.models.find((candidate) => candidate.model === config.model);
+    setDraft({
+      model: config.model,
+      reasoningEffort: reasoningSliderValue(model, config.reasoningEffort),
+      fastMode: config.fastMode,
+    });
+  }, [config]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [open]);
+
+  const save = async () => {
+    if (!draft || saving || disabled) return;
+    setSaving(true);
+    setError('');
+    try {
+      await onSave(draft);
+      setOpen(false);
+    } catch (saveError) {
+      setError(friendlyError(saveError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const pending = loading && !config;
+  const effortPending = pending || Boolean(config?.source === 'desktop'
+    && config.serviceTier === null && !config.reasoningEffort);
+  const unavailable = hasSession && !config && !loading;
+  const displayModel = selectedModel?.displayName || config?.model
+    || (unavailable ? t('模型读取失败', 'Model unavailable') : t('自动选择', 'Automatic'));
+  return (
+    <div className={`model-config${open ? ' open' : ''}`} ref={rootRef}>
+      <button
+        className="model-config-summary"
+        type="button"
+        disabled={loading || Boolean(config?.readOnly) || (!config && !(unavailable && onRefresh))}
+        onClick={() => unavailable ? onRefresh?.() : setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-busy={pending}
+        aria-label={pending ? t('正在读取模型和思考强度', 'Loading model and reasoning effort') : undefined}
+        title={config?.source === 'persisted' ? t('上次保存的模型设置；实时设置暂不可用，请在桌面修改', 'Last saved model settings; live settings are unavailable, edit on Desktop')
+          : config?.readOnly ? t('已读取当前模型；完整设置暂不可用，请在桌面修改', 'Current model is available; edit settings on Desktop while full settings are unavailable')
+          : unavailable ? t('重新读取当前模型', 'Retry reading the current model')
+          : disabled ? t('会话执行中，可预选并在结束后保存', 'Preselect now and save after the task finishes') : t('配置后续轮次', 'Configure subsequent turns')}
+      >
+        {pending ? <i className="model-config-placeholder" aria-hidden="true" /> : <>
+          <span className="model-config-model">{displayModel}</span>
+          {!effortPending && <span className="model-config-effort">
+            {unavailable ? t('点击重试', 'Retry') : config?.reasoningEffort ? reasoningEffortLabel(config.reasoningEffort) : t('默认思考', 'Default reasoning')}
+          </span>}
+          {config?.fastMode && (
+            <span className="fast active" title={t('快速模式', 'Fast mode')}>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.2 1.8 4.7 10h4.8l-.8 8.2 6.6-9.6h-4.8l.7-6.8Z" /></svg>
+            </span>
+          )}
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+          </>}
+      </button>
+      {open && draft && config && (
+        <div className="model-config-popover">
+          <div className="model-config-toolbar">
+            <button
+              className={`model-fast-button${draft.fastMode ? ' active' : ''}`}
+              type="button"
+              aria-pressed={draft.fastMode}
+              aria-label={draft.fastMode ? t('关闭快速模式', 'Turn off fast mode') : t('开启快速模式', 'Turn on fast mode')}
+              title={fastTierAvailable(draftModel)
+                ? draft.fastMode ? t('关闭快速模式', 'Turn off fast mode') : t('开启快速模式', 'Turn on fast mode')
+                : t('当前模型不支持快速模式', 'Fast mode is not available for this model')}
+              disabled={saving || !fastTierAvailable(draftModel)}
+              onClick={() => setDraft({ ...draft, fastMode: !draft.fastMode })}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13.3 2.5-8 10h5.9l-1 9 8.5-12h-6.1l.7-7Z" /></svg>
+            </button>
+            <CustomSelect
+              className="model-config-model-select"
+              value={draft.model}
+              disabled={saving}
+              ariaLabel={t('选择模型', 'Select model')}
+              triggerContent={(
+                <>
+                  <strong>{draftModel?.displayName || draft.model}</strong>
+                  <em>{reasoningEffortLabel(draft.reasoningEffort)}</em>
+                </>
+              )}
+              options={config.models.map((model) => ({
+                value: model.model,
+                label: model.displayName,
+                description: model.description,
+              }))}
+              onChange={(value) => {
+                const nextModel = config.models.find((model) => model.model === value);
+                if (!nextModel) return;
+                setDraft({
+                  model: nextModel.model,
+                  reasoningEffort: reasoningSliderValue(nextModel, draft.reasoningEffort),
+                  fastMode: draft.fastMode && fastTierAvailable(nextModel),
+                });
+              }}
+            />
+          </div>
+          <label className="model-reasoning-slider">
+            <span className="visually-hidden">{t('思考强度', 'Reasoning effort')}</span>
+            <input
+              type="range"
+              min="0"
+              max={Math.max(0, effortOptions.length - 1)}
+              step="1"
+              value={effortIndex}
+              disabled={saving || effortOptions.length < 2}
+              aria-label={t('思考强度', 'Reasoning effort')}
+              aria-valuetext={reasoningEffortLabel(draft.reasoningEffort)}
+              style={{ '--reasoning-progress': `${effortProgress}%` } as CSSProperties}
+              onChange={(event) => {
+                const nextEffort = effortOptions[Number(event.target.value)];
+                if (nextEffort) setDraft({ ...draft, reasoningEffort: nextEffort.reasoningEffort });
+              }}
+            />
+            <span className="model-reasoning-dots" aria-hidden="true">
+              {effortOptions.map((option, index) => (
+                <i
+                  className={`${index <= effortIndex ? 'active' : ''}${index === effortIndex ? ' current' : ''}`}
+                  key={option.reasoningEffort}
+                />
+              ))}
+            </span>
+          </label>
+          {disabled && <p className="model-config-hint">{t(
+            '当前正在执行，可预选并在结束后保存',
+            'Preselect now and save after the task finishes',
+          )}</p>}
+          {error && <p role="alert">{error}</p>}
+          <footer>
+            <button type="button" onClick={() => setOpen(false)}>{t('取消', 'Cancel')}</button>
+            <button className="primary-action" type="button" disabled={disabled || saving} onClick={() => void save()}>
+              {saving ? t('保存中…', 'Saving…') : t('保存', 'Save')}
+            </button>
+          </footer>
+        </div>
+      )}
+    </div>
+  );
+}

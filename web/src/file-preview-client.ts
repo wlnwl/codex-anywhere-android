@@ -1,0 +1,65 @@
+import { useCallback } from 'react';
+import type { BridgeRequest } from './bridge-request-manager';
+import type { TextPreviewDocument, TurnDiffDocument, VisualizationDocument } from './app-types';
+import type { DownloadedImage } from './app-types';
+import { isValidImagePayload } from './image-utils';
+
+export function validPreviewText(content: unknown, size: unknown, maximumBytes: number) {
+  return typeof content === 'string' && !content.includes('\0')
+    && Number.isSafeInteger(size) && Number(size) >= 0 && Number(size) <= maximumBytes
+    && new Blob([content]).size === size;
+}
+
+export function validateTextPreview(result: TextPreviewDocument) {
+  if (!result || typeof result.name !== 'string' || !validPreviewText(result.content, result.size, 2 * 1024 * 1024)
+    || !['markdown', 'code', 'text'].includes(result.kind)
+    || typeof result.language !== 'string' || !/^[a-z0-9-]{1,32}$/.test(result.language)) {
+    throw new Error('text_preview_content_invalid');
+  }
+  return result;
+}
+
+export async function readLinkedImagePreview(request: BridgeRequest, path: string) {
+  let image: DownloadedImage;
+  try {
+    image = await request<DownloadedImage>('attachment.read', { path, source: 'local' });
+  } catch (error) {
+    // Markdown links do not carry the attachment source. Generated images can
+    // live outside project roots (including a custom CODEX_HOME). Ask the
+    // generated-image reader, which independently checks its canonical root.
+    // Never fall back on timeouts, missing files, or invalid image contents.
+    if (!(error instanceof Error) || error.message !== 'local_image_path_not_allowed') throw error;
+    image = await request<DownloadedImage>('attachment.read', { path, source: 'generated' });
+  }
+  if (!isValidImagePayload(image.mimeType, image.data)) throw new Error('attachment_content_mismatch');
+  return `data:${image.mimeType};base64,${image.data}`;
+}
+
+export function useFilePreviews(request: BridgeRequest, threadId: string | null) {
+  const readPreviewImage = useCallback((path: string) => readLinkedImagePreview(request, path), [request]);
+  const readVisualization = useCallback(async (path: string) => {
+    const result = await request<VisualizationDocument>('visualization.read', { path });
+    if (!result?.content || !validPreviewText(result.content, result.size, 2 * 1024 * 1024)) {
+      throw new Error('visualization_content_invalid');
+    }
+    return URL.createObjectURL(new Blob([result.content], { type: 'text/html' }));
+  }, [request]);
+
+  const readTextFile = useCallback(async (path: string) => (
+    validateTextPreview(await request<TextPreviewDocument>('file.text.read', { path }))
+  ), [request]);
+
+  const readTurnDiff = useCallback(async (turnId: string) => {
+    const selectedThreadId = String(threadId || '').trim();
+    const selectedTurnId = String(turnId || '').trim();
+    if (!selectedThreadId || !selectedTurnId) throw new Error('turn_diff_unavailable');
+    const result = await request<TurnDiffDocument>('session.turn.diff.read', {
+      threadId: selectedThreadId, turnId: selectedTurnId,
+    });
+    if (!result || result.threadId !== selectedThreadId || result.turnId !== selectedTurnId
+      || !result.size || !validPreviewText(result.content, result.size, 512 * 1024)
+      || typeof result.truncated !== 'boolean') throw new Error('turn_diff_content_invalid');
+    return result;
+  }, [request, threadId]);
+  return { readVisualization, readTextFile, readTurnDiff, readPreviewImage };
+}

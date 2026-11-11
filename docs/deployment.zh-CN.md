@@ -1,0 +1,652 @@
+# 部署
+
+[English](deployment.md) | 简体中文
+
+文档对应 **v0.4.5（2026-10-22）** · [固定版本部署与升级](release-0.4.5.zh-CN.md) · [文档索引](README.zh-CN.md)
+
+Codex Anywhere 使用一台小型 Linux 转发服务作为浏览器与一个或多个 Codex 执行节点的会合点。Codex、
+项目、附件和生成文件都留在当前选择的节点；每个连接器只建立出站连接，因此个人电脑不需要公网 IP
+或家庭网络入站规则。转发主机也可以同时运行一个 7×24 无头连接器。
+
+`http://127.0.0.1:3300` 只是同一台电脑上的调测地址，不是有实际意义的手机部署方式。
+
+## 最省事的方式：把部署交给 Codex
+
+既然已经在用 Codex，就不用自己兼职复制粘贴工程师了。把这份文档交给它，再提供 ECS 的临时访问权限，
+让它按文档检查环境、安装依赖、配置入口并完成验收。下面的手动步骤既是它的施工说明，也是你的查阅依据。
+
+准备好这三项即可开始：
+
+- **服务器信息**：ECS 地址、SSH 端口、登录用户，以及可用的临时 SSH 账号或私钥文件路径。
+  云控制台/API 的临时凭证不一定能直接登录 SSH，需要说明它能做什么。
+- **访问入口**：准备使用的域名，或已有的 VPN/安全隧道。配置公网 HTTPS/WSS 时，还需要能修改域名解析。
+- **运行位置**：哪台电脑已经安装并登录 Codex；是否还需要让 ECS 自己作为一个 7×24 执行节点。
+
+把凭证放在 Codex 能读取的本机私密文件中，只提供路径，不把密钥正文贴进聊天或提交到仓库。
+可直接复制下面这段，替换方括号中的内容：
+
+```text
+请按 codex-anywhere 的 docs/deployment.zh-CN.md 帮我完成部署，包括文末的新购 ECS 附录。
+仓库：https://github.com/gaotong132/codex-anywhere
+ECS：[地址]，SSH 端口：[22]，用户：[用户名]。
+临时 SSH 凭证文件：[本机路径]。
+域名或已有入口：[域名 / VPN / 安全隧道说明]。
+运行 Codex 的电脑：[系统及位置]；ECS 是否还运行无头连接器：[是 / 否]。
+
+请先检查系统和已有服务，保存必要备份，再安装依赖、部署 Relay、配置 HTTPS/WSS 和本机 Connector。
+保留已有业务、网络配置和设备身份；只有选择“是”时才安装 ECS 无头连接器。
+除需要我登录、完成验证或提供缺失权限外，请自行完成常规步骤，不要只给我一串待执行命令。
+不要输出或提交凭证。完成后报告部署版本、访问地址、健康检查、节点在线状态和首次配对步骤。
+最后列出应撤销的临时部署权限，保留服务运行所需的凭证与身份。
+```
+
+Codex 能自动完成多少，取决于你提供的权限和网络条件。DNS、账号登录或首次配对需要你参与时，
+让它指出具体步骤即可；不必为了远程使用 Codex，先把自己培训成专职运维。
+
+## 准备资源
+
+第一次购买 ECS、尚未配置公网入口时，可按文末[附录：新购 ECS 从零部署](#附录新购-ecs-从零部署)完成基础安装。
+
+- 可访问的 Linux ECS/VPS：Git、Docker Engine、Docker Compose v2；如果还要作为执行节点，需要
+  Node.js 22.12+ 和已登录认证的 Codex CLI。
+- Windows Codex 电脑：Codex Desktop/CLI、Node.js 22.12+、Git、PowerShell。
+- 浏览器可达的入口：经过公网或不可信网络时推荐 WSS。域名、TLS 证书和反向代理可选，也可以使用
+  私有 VPN 或安全隧道。
+
+不需要数据库、Redis、对象存储，也不需要给 Windows 电脑开放公网入站端口。
+
+正文的 `git clone` 默认取得 `main`；固定发布版请在构建前选择对应 tag，所有节点使用同一提交。
+仅转发的 ECS 不需要在宿主机安装 Node.js；Docker 会在容器内安装构建依赖。确认 SSH 账号有安装软件、
+管理 Docker/Nginx 和 systemd 所需的权限，并预留镜像构建与回滚备份的磁盘空间。
+
+## 1. 启动转发服务
+
+在 ECS/VPS 执行：
+
+```bash
+git clone https://github.com/gaotong132/codex-anywhere.git
+cd codex-anywhere
+./scripts/relay.sh setup
+```
+
+`setup` 会创建权限为 0600 的 `.env` 和随机连接器专用密钥，然后构建镜像、启动容器并等待健康检查。
+参考 Compose 只发布 `127.0.0.1:3300`；应继续关闭公网 3300 端口。
+
+根据网络选择入口：
+
+| 网络 | 推荐入口 |
+| --- | --- |
+| 公网 | 持续维护的 HTTPS/WSS 反向代理，转发到 `127.0.0.1:3300` |
+| 仅自己的可信设备 | 在转发服务终止的私有 VPN 或安全隧道 |
+| 同一主机开发 | 直接访问 `127.0.0.1:3300` 的 HTTP/WS |
+
+[`deploy/nginx-example.conf`](../deploy/nginx-example.conf) 只是参考配置；已有入口、证书、VPN 或隧道工具
+都可以继续使用。反向代理必须支持 WebSocket 升级并覆盖客户端地址转发头。引入第三方入口也意味着
+扩大信任边界。
+
+## 2A. 安装 Windows/Desktop 连接器
+
+在运行 Codex 的电脑上执行：
+
+本节默认接入 **已登录并运行的 Codex Desktop**，请使用同一个 Windows 用户安装连接器；仅安装 CLI
+不等于具备 Desktop 会话投递能力。电脑需要保持开机、用户登录及网络在线，睡眠后无法远程执行。
+先从 [Node.js 官网](https://nodejs.org/en/download)安装 22.12+，安装 Git，并在新开的 PowerShell 中确认
+`node --version`、`npm.cmd --version` 和 `git --version` 可用。Desktop 自带的 Codex 可执行文件可以由启动器发现。
+
+```powershell
+git clone https://github.com/gaotong132/codex-anywhere.git
+cd codex-anywhere
+npm ci
+```
+
+在 ECS 运行 `./scripts/relay.sh token` 读取连接器密钥，通过私密方式传到本机并安装：
+
+```powershell
+$connectorToken = Read-Host 'Connector token' -AsSecureString
+.\scripts\install-connector.ps1 `
+  -ConnectorToken $connectorToken `
+  -BridgeUrl 'wss://codex.example.com/ws'
+```
+
+请换成实际的 `ws://` 或 `wss://` 地址。Windows 使用当前用户 DPAPI 保护连接器密钥和设备私钥，
+把配置保存在 `%USERPROFILE%\.codex-anywhere`，并通过当前用户后台任务保持一个连接器运行；任务计划
+程序不可用时会回退到登录快捷方式。
+
+新会话没有默认工作目录，需要在 Web 界面选择项目。`-AllowedRoots` 可选，默认只允许连接器仓库；
+需要选择其他项目目录创建会话时才增加根目录；文本与链接位图预览不需要。`-AllowAnyFileDownload`、`-EnableNetworkAccess` 和
+`-AllowFullAccess` 都是显式开关。
+
+Markdown、SVG、源代码、配置和文本预览支持连接器账号可读的任意绝对路径，保留 2 MiB、UTF-8 和类型校验；链接位图预览同样不限根目录，保留 JPEG/PNG/WebP 内容校验、32 MiB 原图及 512 KiB 预览限制。`-AllowAnyFileDownload` 只控制确认下载的目录范围。需要在 Web 界面使用其他项目树时，请用
+完整的 `-AllowedRoots` 列表重新运行安装程序。
+
+安装多个连接器时，请为每个节点使用稳定、容易识别的路由：
+
+```powershell
+.\scripts\install-connector.ps1 `
+  -DeviceLabel '工作电脑' `
+  -AllowedRoots 'D:\project'
+```
+
+## 2B. 安装 7×24 Linux/ECS 连接器
+
+Linux 连接器使用 `headless` 模式：新建和恢复的会话都由它自己的 Codex app-server 管理，不依赖 Codex
+Desktop。先从 [Node.js 官网](https://nodejs.org/en/download)安装 22.12+，不要假定发行版自带的 `nodejs`
+满足版本要求。然后安装 [Codex CLI](https://developers.openai.com/codex/cli/)，并在**实际运行服务的账号**下登录：
+
+```bash
+node --version
+npm --version
+npm install -g @openai/codex
+codex --version
+codex login --device-auth
+codex login status
+```
+
+设备码登录需要账号或工作区允许该方式；在自己的浏览器中完成登录与验证。不可用时，按
+[官方无头登录说明](https://developers.openai.com/codex/auth/#login-on-headless-devices)使用 SSH 本地回调转发等方式，
+不要把 CLI 登录凭证当成 Relay 的连接器密钥。安装成功前，应在同一账号下从项目目录运行一次 `codex`，确认可以正常使用。
+
+连接器和转发服务位于同一主机、同一仓库时，安装器会复用转发服务密钥而不把它打印出来。请选择专用
+工作区根目录，不要把整个 Home 目录暴露给连接器：
+
+```bash
+# 本示例接续附录的 root Bash，Codex 也必须已由 root 登录。
+mkdir -p /root/codex-workspaces
+./scripts/install-linux-connector.sh \
+  --user root \
+  --label 'ECS · 7×24' \
+  --allowed-root /root/codex-workspaces \
+  --enable-network
+```
+
+如果使用普通服务账号，明确传入 `--user <账号>`，并把仓库和工作区放在该账号可访问、可写的位置，
+不能直接使用 `/root` 下的示例路径。安装器默认选择 `SUDO_USER`，所以“root 登录过 Codex”不代表
+`sudo` 安装选中的普通账号也已登录。Node/npm/Codex 必须对服务账号可执行；使用 nvm 等用户级安装时，
+还要确认以 root 运行安装器时能找到正确二进制，systemd 不会自动读取交互式 Shell 初始化文件。
+
+`--enable-network` 是可选项；只有该节点上的 Codex 确实需要申请网络访问时才启用。若还需要在 Web
+端选择“完全访问权限”，必须另外传入 `--allow-full-access`。安装器会在
+`/etc/codex-anywhere` 写入权限为 0600 的环境文件，在服务账号的 `~/.codex-anywhere` 保存连接器设备
+身份，安装经过约束的 systemd 服务并启动。连接到其他转发主机时，请在安装进程环境中私密提供
+`BRIDGE_CONNECTOR_TOKEN`，并设置 `--bridge-url wss://codex.example.com/ws`。
+
+安装器会执行 `npm ci` 和 Node 构建，但不会安装 Node.js、Codex CLI，也不会替用户登录。
+重跑 Linux 安装器会重写环境文件，因此应重新提供完整的根目录、路由和已启用权限参数；不要假定它像 Windows 安装器一样保留省略的选项。
+
+查看服务状态时不需要读取它的环境文件：
+
+```bash
+systemctl status codex-anywhere-connector --no-pager
+journalctl -u codex-anywhere-connector -n 50 --no-pager
+```
+
+## 3. 批准连接器并配对浏览器
+
+每个连接器首次尝试连接后，回到转发主机。每个新连接器路由都要分别执行一次 `approve`，然后再配对
+浏览器：
+
+```bash
+./scripts/relay.sh approve
+./scripts/relay.sh pair https://codex.example.com
+```
+
+`approve` 会列出待批准端点，并在信任所选连接器前要求确认；第二个连接器不会被自动信任。`pair` 会
+输出十分钟有效、只能使用一次的
+浏览器链接和二维码。请把示例地址替换成真实 Web 地址。
+
+摄像头不是必需条件：可以直接打开或粘贴链接，也可以在配对页面上传二维码截图；二维码只在浏览器
+本地解析。配对完成后，该浏览器配置使用自己的已批准设备密钥重连，不存在共享浏览器 Token 或恢复
+登录。
+
+打开链接会自动弹出配对框并填入配对码，点击“配对”即可连接；同一标签页打开另一条链接也会更新
+输入内容。配对过程中可以随时取消，无需关闭页面；认证超过 15 秒未完成会自动结束。配对码无效、
+已使用或已过期时，会显示错误并恢复可编辑状态，修改配对码或生成新链接后即可重试，不会自动反复
+配对。成功前刷新页面会丢弃内存中的配对码，需要重新打开或粘贴链接。
+
+## 4. 验证
+
+```bash
+./scripts/relay.sh status
+./scripts/relay.sh devices
+```
+
+先确认本机 `/health`、公网 HTTPS 和实际 WSS 连接，再检查节点在线与测试会话；前一项成功不能代替后一项。
+Markdown 文件预览保留单个换行，并兼容 `###1.`、`###章节` 这类紧贴文字的标题；标准标题、表格、列表和强调正常渲染，转义文字与代码保持原样。此阅读排版只应用于文件预览，不改写原文件，也不改变聊天消息的 Markdown 规则。
+
+当前 `main` 的 HTML 文件还应默认显示网页：测试源码切换、可读的相对图片、子页面与返回。
+它只加载内嵌 CSS/JavaScript 和受支持的本机位图，不是完整网站托管服务；独立 CSS/JS 文件不自动打包。
+
+在手机打开一个已有会话并发送无害消息，确认浏览器和 Codex 都收到更新。如果会话中包含本机文件
+链接，再分别点击一个 Markdown 和常见源代码文件：两者都应打开有界预览，受支持的源文件应出现语法
+着色，而且预览页都应保留“下载”按钮。如果已完成回复显示文件变更，点击统计并确认有界 Diff 属于
+该轮任务，再切换一次自动换行。Codex 提供上下文统计时，确认右上角活动状态环显示用量，悬停或点击
+可以看到准确 Token 数；发生过上下文压缩的会话应在时间线保留压缩节点。
+对于 Desktop 发起的轮次，正在压缩提示通过有限范围的本地 HTTP 或 WebSocket 日志跨度识别，
+并严格匹配任务和轮次。恢复正常生成或记录完成后会清除提示，再次压缩会重新计时。
+本地日志缺失或格式不兼容时可能无法显示此辅助状态；不会仅凭 Token 用量推断正在压缩。
+验证消息发送时，应覆盖历史同步先到、发送回执先到两种顺序：同一次发送在后续轮询和重连后
+都应只有一个气泡。迟到回执不能覆盖历史消息时间；主动重复发送的文字和不同图片附件应分别保留。
+Desktop 自动附带的应用内浏览器上下文（包括 `external_browser_tabs` 包装）不会显示为用户消息气泡。
+已识别上下文之后的实际输入会保留；引用示例、助手正文、不完整或未知格式仍按原文显示。
+同时确认公网入口使用了
+预期传输方式，并且外网不能访问 `ECS-IP:3300`。对长会话向上浏览一次，确认出现更早记录加载提示、
+当前阅读位置不会跳动，并且失败后可重试。对连接器持有的测试轮次打开运行状态条，确认“停止”只中断
+这一轮。对隔离的 Desktop 测试轮次重复验证，停止必须绑定确切 turnId；运行中的 Goal 仍需在桌面停止，因为中断一个轮次不代表暂停目标。
+
+在线环境不超过两个时，侧栏直接显示切换按钮，区分选中状态和在线状态，不受已登记设备总数影响；额外的离线设备可展开查看，选中离线设备或当前设备掉线时自动展开并保留选中状态，不会自动切换环境。总共只有一到两台设备时，离线设备也保持原来的按钮位置；超过两个在线环境时保留完整下拉选择。切换后侧栏保持展开，选定会话才收起，并恢复该环境最近会话；附件草稿会清空，避免传到另一台机器。
+
+批准多个连接器后，在侧边栏切换执行环境，确认顶部
+环境标签、会话列表、最近工作目录和在线状态一起变化；分别在两个节点创建一个无害会话，再来回切换，
+确认历史和文件不会混到另一台机器。
+
+浏览器扩展是**实验性附加特性**，基础部署不需要它。需要时再按[扩展安装指南](../extension/README.zh-CN.md)
+构建、加载插件，配置精确扩展 Origin 白名单及节点 MCP；普通 Web 配对成功并不代表这些附加步骤也已完成。
+
+## 日常管理与升级
+
+生产源码必须与已提交版本一致，不再部署叠加未提交功能补丁的版本；功能改动先审查并提交。本机专用 `AGENTS.md` 用 `.git/info/exclude` 排除，凭证保留在已忽略的 `.env` 或仓库外的服务配置中，备份放在仓库之外。发布前后确认 `git status --porcelain` 为空，并记录提交号和镜像 ID。发现工作区有改动时先整理，不自动覆盖或叠加。
+
+
+ECS 连接器允许不同会话并发运行。切换到另一个会话后可继续发送消息，停止和审批仅作用于当前会话。
+同一会话仍只有一个活动轮次；运行中发送文字会追加到该轮次。升级或重启连接器前应等待所有会话空闲。
+
+固定使用发布版本时，按 [v0.4.5 升级步骤](release-0.4.5.zh-CN.md#升级)操作。
+`update` 脚本跟随 `main`，不会锁定 tag，也不会等待全部业务任务空闲。升级前先保留旧提交、镜像和私有状态，
+选择空闲窗口，并在重启后逐个验证 Connector。
+
+
+
+在 ECS 仓库目录执行：
+
+| 命令 | 用途 |
+| --- | --- |
+| `./scripts/relay.sh status` | 查看容器并验证健康状态 |
+| `./scripts/relay.sh token` | 输出连接器专用密钥，只能私密传输 |
+| `./scripts/relay.sh pending` | 查看待批准端点 |
+| `./scripts/relay.sh approve` | 审核并批准待处理端点 |
+| `./scripts/relay.sh pair <公网地址>` | 生成单次浏览器配对链接 |
+| `./scripts/relay.sh devices` | 查看已批准端点、在线状态、连接数及最近连接/最后在线时间 |
+| `./scripts/relay.sh devices --json` | 输出设备与活跃记录的 JSON，便于脚本处理 |
+| `./scripts/relay.sh revoke` | 撤销已批准端点 |
+| `./scripts/relay.sh update` | 快进更新 `main`、重建并验证；同机已启用的无头连接器也会重启 |
+
+设备按批准时间倒序排列，与 `revoke` 的选择序号一致。同一设备的多个连接合并统计；在线和最后在线反映
+WebSocket 连接与心跳，不代表用户正在操作。文本时间为 UTC，JSON 时间为 Unix 毫秒。活跃历史从升级后开始
+记录，未观察到的时间显示“未记录”（JSON 为 `null`），不会用批准时间冒充最后在线时间。
+
+Relay 在设备注册表旁单独写入私有 `devices.json.activity.json`，每 5 秒及认证/断连时更新。运行中快照超过
+15 秒未更新时显示“状态未知”（JSON 连接数为 `null`）；正常停止显示离线，重启保留历史并重新统计连接。
+这份快照不通过公网接口提供，也不改变配对身份或自动撤销设备。
+
+转发服务和连接器仓库应保持同一提交。`relay.sh update` 会重启同机已启用的同名 Linux 服务，但不会为
+宿主机执行 `npm ci`，也不会更新另一个目录里的 Connector 仓库。先检查服务的 `WorkingDirectory` 和 `User`，
+在它对应的仓库中快进到目标提交，再用该服务账号运行 `npm ci`；启动脚本会重新执行 `build:node`。
+仅转发的主机不需要这一步；其他主机上的 Connector 也要单独更新依赖并重启。
+
+### Windows 连接器实际重启
+
+已有 Windows 会话的 Web 消息通过桌面的 `codex-ipc` 原生输入通道，交给持有该会话的 Desktop 实例。空闲时开始新轮次，运行中追加用户输入，沿用桌面的权限、工作目录和会话设置；Web 的模型、思考强度和 Fast 通过原生 owner 条件更新并回读确认，发送时不再回放 Connector 的旧模型缓存。不再通过 `send_message_to_thread` 包装为另一聊天转发。旧消息不会改写。
+
+Web 切换或刷新会话不会打开、切换桌面当前页面。模型优先读取原生 owner 的实时设置；会话尚未加载或实时读取暂不可用时，通过 `thread/read`（`includeTurns: false`）读取最后保存的模型和思考强度，只读显示并在提示中说明来源。不推断默认模型，不加载完整历史，不增加轮询或缓存；Fast 设置未知时保持未知。收到原生实时状态后恢复实时显示。
+
+未加载的会话会先在桌面打开，因此可能切换桌面当前会话。该集成依赖桌面内部 owner/follower 协议，已验证客户端 26.1013.4894.0；不是承诺长期稳定的公共 API。协议不兼容或目标未就绪时明确报错，不启动第二个会话写入者，也不退回转发工具。没有启用桌面尚未开放的实验性用户消息接纳功能。
+
+如果 Web 发送提示“桌面原生输入通道尚未就绪”，确认同一 Windows 用户的桌面已运行并打开目标会话，然后更新并重启 Windows Connector。只更新 ECS 无法替换电脑上的旧进程，不需要重新配对。元数据操作（读取、重命名、归档、导航）仍使用 `codex-app-tools-*`，按能力兼容旧版 `codex-browser-use-*` 通道。
+
+通道连接和初始化合并并发请求，单次超时不会关闭其他请求使用的连接。请求和普通响应上限为 8 MiB；独立的状态订阅连接允许最大 32 MiB 的长会话快照，更大的帧在分配正文内存前拒绝。请求明确绑定目标会话和 owner，Connector 不参与会话所有权竞争。`connector.status` 中 `desktopOnline` / `desktopTools` 表示应用工具通道，`desktopInputOnline` 表示原生输入连接可初始化；它们不代表每个会话已加载，与 app-server 的 `codexOnline` 分开。
+
+原生状态恢复后，Web 会自动重试一次失败的权限读取。模型列表晚于对应原生设置返回时，选择器立即恢复，无需等待下一轮状态轮询。状态未知或不匹配时仍保持只读；修改设置仍需通过原生校验和结果确认。
+
+如果 Web 提示“消息可能已经送达”，表示提交后的结果不能确认。Web 会重新读取当前会话，保留输入供核对，不会自动重发或改用其他通道。仅在桌面明确返回“当前轮次已结束、无法追加”的前置条件错误时，才尝试开始新轮次。请先确认历史消息和回复，再决定是否重试。
+
+启动器会跳过已经运行的 Connector，**重新运行安装器不是强制重启**。下面适用于依赖已经安装的情况。
+若 lockfile 改变，先等待任务空闲，停止本安装的计划任务守护器（或登录启动的守护器）和 Connector，
+再执行 `npm.cmd ci`、构建并运行安装器。否则 Windows 可能锁住已加载的原生模块（如 Sharp），
+守护器也可能在安装期间拉起旧进程。依赖不变时，可在仓库 PowerShell 中构建并重启；只停止命令行
+匹配本仓库入口的 `node.exe`，不停止 Codex Desktop：
+
+```powershell
+git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { throw 'Git update failed' }
+npm.cmd run build:node
+if ($LASTEXITCODE -ne 0) { throw 'Connector build failed' }
+$connectorEntry = Join-Path (Get-Location).Path 'build\connector\index.js'
+$entryPattern = '(?i)(?:^|[\s"])' + [regex]::Escape($connectorEntry) + '(?=[\s"]|$)'
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+  Where-Object { $_.CommandLine -match $entryPattern } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction Stop }
+.\scripts\install-connector.ps1
+```
+
+已有 Windows 配置及 DPAPI 身份会复用。固定 tag 时将第一步替换为该版本的获取/检出步骤，不再拉取 main。
+重启后再次用 `relay.sh devices` 检查节点重连；启动失败查看 `%USERPROFILE%\.codex-anywhere\last-start-error.log`。
+
+协调升级期间仍打开的浏览器页面需要完整刷新；已加载页面会继续运行旧 JavaScript，
+直到刷新或重新打开，而且严格协议不支持混用版本。
+
+### 备份与失败恢复
+
+| 必须保留的内容 | 位置或获取方式 |
+| --- | --- |
+| 旧提交、镜像与项目标识 | `git rev-parse HEAD`；记录 `docker compose ps -q bridge` 对应的镜像 ID，并用 `docker image save` 导出；保留实际 Compose 项目名 |
+| Relay 私有配置与身份 | 仓库 `.env`、实际 Compose 配置，以及 `bridge-state` 命名卷内的 `/data`；包含 `devices.json` 和活动记录，不要猜宿主机卷路径 |
+| Linux Connector | `/etc/codex-anywhere/connector.env`、systemd 单元、服务账号的 `~/.codex-anywhere`，以及它的 Codex 配置、认证与会话状态 |
+| Windows Connector | 当前用户的 `%USERPROFILE%\.codex-anywhere`；DPAPI 文件绑定用户/系统，复制到别的电脑不保证可解密 |
+| 公网入口与业务文件 | 实际 Nginx 配置、证书及续期配置；每个节点的工作区、附件和生成文件 |
+
+备份目录应只允许管理员访问；在没有任务和设备注册变更的窗口保存一致状态，保留至少一份服务器之外的私密副本。
+恢复时先停止更新后的服务，把代码和依赖恢复到记录的匹配版本，加载保存的 Relay 镜像并恢复它对应的
+Compose 镜像标签，再启动 Relay/Connector，重新执行上述验收。配置只恢复必要的变更，不要用旧注册表覆盖
+升级后新增的合法配对或撤销记录。浏览器也要刷新到恢复的版本。
+
+不要用 `docker compose down -v`、清空 `/data` 或重建身份来“修复”升级，这会删除配对状态。
+`relay.sh update` 本身不负责备份、空闲检测或自动回滚；这些步骤需要部署者完成。
+
+## 排查问题
+
+| 现象 | 检查项 |
+| --- | --- |
+| Windows 启动后仍离线 | 确认同一用户已运行 Desktop、电脑未睡眠，查看 `last-start-error.log`，并检查连接器是否已批准；不要把计划任务存在当作节点在线 |
+| 电脑端会话的权限不能在 Web 中选择 | 新版连接器通过原生 owner 读取和修改当前会话权限，仅允许空闲且没有待处理请求时修改；完全访问需启用 `CODEX_ALLOW_FULL_ACCESS=1`。未识别配置显示“自定义权限”。owner 不可用时，在电脑端打开该会话后重试；配置被其他端修改时先刷新权限。 |
+| Linux 提示未登录或无法执行 Codex | 核对 systemd 的 `User`、`HOME`、二进制路径及该账号的 `codex login status`，不能只检查 SSH 登录账号 |
+| 配对后清理浏览器数据，无法自动连接 | 浏览器身份保存在该配置中；生成新配对链接重新注册，并按需撤销旧设备，不要重置 Relay 全部设备 |
+| HTML 仍显示源码或相对图片缺失 | 完整刷新 Web，更新 Connector，并检查图片路径是否对应可读的 JPEG/PNG/WebP 文件 |
+| 生成图片未显示 | 更新并重启所选 Connector、刷新 Web，确认 Codex 生成图片目录内的原图仍在；只更新 Relay 无法修复节点侧历史解析 |
+| 链接图片预览提示目录未获授权 | 更新所选 Connector，空闲后重启；当前链接图片预览无需配置 `-AllowedRoots`。如果提示图片不存在或无法读取，则需确认该设备上的原图仍在且可读。 |
+| Docker 因 package.json 权限错误退出 | 使用 v0.4.3 重建，Dockerfile 已为非 root 运行账号设置包元数据读取权限；不要公开私有配置或改用 root 绕过 |
+| 容器健康状态仍是 starting | 参考配置每 30 秒探测一次，启动宽限期为 10 秒；检查容器状态和日志，等待首轮探测后再判断失败 |
+| 支持的代码链接仍然直接下载 | 更新两端仓库、重启连接器，再完整刷新或重新打开浏览器页面 |
+| 预览弹出但提示失败 | 文本预览需为不超过 2 MiB 的普通 UTF-8 文件、受支持的文件名/类型，且服务账号有读取权限；链接位图预览需为不超过 32 MiB 的可读 JPEG/PNG/WebP 原图 |
+| 代码可读但没有语法着色 | 该语言不在按需高亮子集内，或文件超过 512 KiB 高亮上限；此时安全显示纯代码属于预期行为 |
+| 二进制、`.env`、证书或密钥文件进入下载流程 | 敏感、二进制和未识别格式有意不提供内联文本预览 |
+| 上下文环没有进度 | 更新两端仓库并完整刷新浏览器；所选会话还必须包含 Codex 提供的 Token 统计 |
+| 更早历史没有加载 | 先离开最新消息边缘并继续向上滚动；只有用户开始浏览旧内容后才会自动分页。请求失败时使用可见的重试按钮 |
+| 会话列表先出现，运行中的 Desktop 标记稍后才显示 | 这是预期行为：app-server 会话会立即返回，Desktop 活动状态在后续轮询异步合并 |
+| 手机输入显示来自无关会话，或投递被会话身份校验阻止 | 暂停发送，同时更新并重启 Windows 连接器（不能只更新 ECS），并审查受影响历史。原生调用来源与目标必须为同一会话，禁止借用其他会话绕过失败 |
+| 运行中的任务没有停止按钮 | Web 可停止连接器轮次或已确认 turnId 的 Desktop 轮次；状态未知、协议不兼容或运行中的 Goal 需在电脑上处理 |
+| 预期的执行环境没有出现 | 确认对应 systemd/Windows 连接器正在运行且已批准，再等待转发服务刷新在线状态 |
+| Linux 会话完成第一轮后无法继续 | 确认 `CODEX_CONNECTOR_MODE=headless`，更新仓库并重启 systemd 服务 |
+
+预览权限和下载权限相互独立。文本与链接位图预览支持可读绝对路径，不限工作区根目录。`-AllowAnyFileDownload` 只影响确认下载。
+
+## 多设备与自定义名称
+
+Windows 与 Linux 安装器会为新设备生成并保存唯一 ID，重新安装保留原 ID。已有 `personal-pc`、`ecs` 继续使用，无需重新配对。每台新机器独立安装并批准，不要复制另一台机器的身份文件、DPAPI 文件或整份私有配置。手动运行连接器时应显式配置独立的 `BRIDGE_DEVICE_ID`。
+
+Web 侧边栏“执行环境”旁的编辑按钮可修改当前设备名称，最多 80 个字符。名称保存到 Relay 并同步给其他已授权浏览器；离线设备也可改名。名称可以重复，下拉选项同时显示 ID 便于区分。改名不改变路由、身份、会话和配对。已经注册的设备以 Relay 名称为准，修改安装参数不会覆盖它。
+
+服务端也可以执行：
+
+```sh
+./scripts/relay.sh devices
+./scripts/relay.sh rename personal-pc "工作电脑"
+```
+
+相同身份断线重连仍会替换旧连接；不同身份使用已注册 ID 会被拒绝批准，已批准身份也不能改用其他路由。遇到 `device_route_conflict` 或 `device_route_mismatch`，检查安装配置和设备列表，给新设备分配独立 ID 后重新申请批准；不要为接入新机器撤销仍需使用的旧机器。已有注册记录存在重复路由时，需要管理员保留正确身份并撤销冲突记录。
+
+设备列表包含全部已批准的连接器（含离线设备），不再截断为 24 台。超过两台在线时使用下拉选择，否则在线设备直接显示切换按钮，额外的离线设备可展开查看；撤销设备后列表随下一次状态广播更新。
+
+## 支持的配置
+
+转发服务 `.env`：
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `BRIDGE_CONNECTOR_TOKEN` | `relay.sh setup` 自动生成 | 只接受连接器使用的密钥，至少 32 个字符 |
+| `BRIDGE_SESSION_MAX_AGE_MS` | `3600000` | 已认证连接重新鉴权前的最长生存期 |
+| `BRIDGE_TRUST_PROXY` | 参考 Compose 为 `1` | 只信任会覆盖客户端地址头的本机代理；没有此类代理时设为 `0` |
+| `CODEX_UI_LANGUAGE` | `zh-CN` | Web 与设备管理命令语言：`zh-CN` 或 `en` |
+| `BRIDGE_EXTENSION_ORIGINS` | 空 | 可选实验扩展的精确 Origin 白名单；安装方式见扩展指南，不使用通配符 |
+
+连接器安装参数：
+
+| 参数 | 默认值 | 用途 |
+| --- | --- | --- |
+| `-BridgeUrl` | `ws://127.0.0.1:3300/ws` | 转发服务 WebSocket 地址 |
+| `-DeviceId` / `--device-id` | 首次安装自动生成唯一 ID；重新安装沿用原值 | 稳定路由，与名称分离；不要在不同设备上复用 |
+| `-DeviceLabel` / `--label` | 新设备为主机名；重新安装沿用原值 | 首次注册名称，之后可在 Web 或服务端改名 |
+| `-AllowedRoots` | 连接器仓库 | 新会话和普通下载可使用的本机项目根目录；不限制文本与链接位图预览 |
+| `-AllowAnyFileDownload` | 关闭 | 确认后允许下载配置根目录外的文件；不改变预览策略 |
+| `-EnableNetworkAccess` | 关闭 | 允许连接器持有的 Codex 轮次申请网络访问 |
+| `-AllowFullAccess` / `--allow-full-access` | 关闭 | 允许已批准的 Web 端取消该节点上 Codex 的审批和沙箱限制 |
+
+连接器运行时环境变量：
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `BRIDGE_DEVICE_LABEL` | 设备 ID | 首次注册的连接器名称；已批准设备的显示名由 Relay 保存 |
+| `CODEX_CONNECTOR_MODE` | Windows 为 `desktop`，其他平台为 `headless` | 保留 Desktop 会话所有权，或让无头 app-server 管理恢复的会话 |
+| `CODEX_ALLOW_FULL_ACCESS` | `0` | Web“完全访问权限”的服务端总开关 |
+| `BRIDGE_DEVICE_IDENTITY_FILE` | 安装器管理 | Linux 上权限为 0600 的 Ed25519 连接器身份文件 |
+
+“完全访问权限”和 `-AllowedRoots` 是两条不同边界：后者仍限定新会话目录和普通下载，但 Codex 本身将退出
+沙箱，并可读写连接器服务账号能访问的任何文件。只应在专用节点上、且所有已批准浏览器都可信时开启。
+
+调整文件根目录、下载范围、入口或连接器网络、完全访问权限前，请阅读[安全策略](SECURITY.zh-CN.md)。
+
+## 附录：新购 ECS 从零部署
+
+本附录以 **Ubuntu Server 24.04 LTS、systemd、独立公网 IPv4** 的全新 ECS 为例，步骤核对日期为
+2026-09-15。其他发行版需要换用相应的软件源和服务配置。已有网站的服务器应合并配置，避免覆盖原站点。
+下文的 `codex.example.com` 必须全部换成自己的域名。
+
+### A. 软件和服务清单
+
+| 组件 | 是否需要 | 用途 / 运行方式 |
+| --- | --- | --- |
+| Git、curl、CA 证书 | 必需 | 获取代码、下载依赖、验证 HTTPS |
+| Docker Engine、Compose 插件 | 必需 | 构建和运行 Relay，Docker 由 systemd 管理 |
+| Nginx | 本附录需要 | 监听 80/443，终止 TLS，反向代理 HTTP 和 WebSocket |
+| 域名及 DNS 解析 | 本附录需要 | 让客户端访问固定域名，并完成证书域名验证 |
+| TLS 证书、Certbot / snapd | 本附录需要 | 签发和自动续期证书；已有受信任证书可用自己的证书管理工具 |
+| Node.js 22.12+、已认证的 Codex CLI、Connector | 可选 | 仅在 ECS 也要执行 Codex 任务时安装；仅转发时 Node 在容器内运行 |
+
+**WSS 是经过 TLS 加密的 WebSocket，不需要另外安装“WSS 服务”。** 在这个方案中：
+
+```text
+浏览器 ── HTTPS / WSS :443 ──> Nginx ── HTTP / WS 127.0.0.1:3300 ──> Relay
+PC Connector ── 出站 WSS :443 ──> 同一个 Nginx / Relay
+ECS Connector（可选）── 本机 WS 127.0.0.1:3300 ──> Relay
+```
+
+Web 入口为 `https://codex.example.com`，远程连接器地址为 `wss://codex.example.com/ws`。
+TLS 在 Nginx 终止，Relay 使用回环地址上的明文 WS；不需要给容器配置证书，也不需要数据库或 Redis。
+
+### B. 公网、域名和端口
+
+在域名服务商处添加 `codex` 的 **A 记录**，指向 ECS 的公网 IPv4（不是内网 IP）。只有在 ECS 的 IPv6
+监听、路由和安全组均已配置时才添加 AAAA 记录。先使用直接 DNS 解析；如需 CDN，之后再核对其 WebSocket 支持。
+
+同时检查云安全组和操作系统防火墙：
+
+| 入站 TCP 端口 | 来源 | 用途 |
+| --- | --- | --- |
+| 22（或实际 SSH 端口） | 管理员的可信 IP | SSH 运维 |
+| 80 | 公网 | 本附录的 HTTP-01 证书验证，以及跳转 HTTPS |
+| 443 | 需要访问的客户端网络 | HTTPS 页面和 WSS 共用此端口 |
+| 3300 | 不向公网开放 | 仅允许本机回环访问 Relay |
+
+若启用主机防火墙，先允许实际 SSH 端口与管理员 IP，并保留当前 SSH 连接验证新连接可用；不要清空已有规则。
+Docker 发布端口可能绕过 UFW，因此应保留 Compose 的 `127.0.0.1:3300:3300` 绑定，不能只依赖 UFW 阻止公网 3300。
+参见 [Docker 防火墙说明](https://docs.docker.com/engine/install/ubuntu/#firewall-limitations)。
+服务器还需要可用的 DNS、软件源及 HTTPS 出站网络；若运行 Connector，还需能访问其 Codex 服务。
+
+### C. 安装基础软件与 Docker
+
+通过 SSH 登录后，以下安装命令在 **ECS 的 root Bash** 中依次执行（普通管理员先运行 `sudo -i`）。
+本示例将仓库放在 `/root/codex-anywhere`，不要求为 Docker 开放远程管理端口。
+
+```bash
+apt-get update
+apt-get install -y git curl ca-certificates nginx snapd dnsutils nano
+```
+
+按 [Docker 官方 Ubuntu 安装指南](https://docs.docker.com/engine/install/ubuntu/#install-using-the-apt-repository)
+的“Set up Docker's apt repository”配置官方 APT 软件源，然后执行：
+
+```bash
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable --now docker nginx
+docker compose version
+docker run --rm hello-world
+```
+
+云镜像若已预装 Docker，先核对现有版本和 Compose 插件，不要直接混装不同来源的软件包。
+
+### D. 启动 Relay，建立 HTTP 验证入口
+
+```bash
+cd /root
+git clone https://github.com/gaotong132/codex-anywhere.git
+cd /root/codex-anywhere
+./scripts/relay.sh setup
+curl --fail --silent --show-error http://127.0.0.1:3300/health
+dig +short A codex.example.com
+dig +short AAAA codex.example.com
+```
+
+健康接口应返回成功，DNS 应指向这台 ECS。此时还不能直接启用仓库里的 HTTPS 配置：证书尚未签发。
+先用 `nano /etc/nginx/sites-available/codex-anywhere` 创建以下临时 HTTP 站点：
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name codex.example.com;
+    server_tokens off;
+    access_log off;
+    location / {
+        default_type text/plain;
+        return 200 "codex-anywhere TLS setup\n";
+    }
+}
+```
+
+```bash
+ln -s /etc/nginx/sites-available/codex-anywhere /etc/nginx/sites-enabled/codex-anywhere
+nginx -t && systemctl reload nginx
+```
+
+从另一台电脑打开 `http://codex.example.com`，确认显示 `codex-anywhere TLS setup`。如果出现默认欢迎页，
+检查域名和 `server_name`；如果连接超时，检查 DNS、安全组、防火墙及云服务商的入口限制。此临时站点不提供配对入口。
+
+### E. 签发证书，启用 HTTPS / WSS
+
+使用 [Certbot 的 snap 安装方式](https://certbot.eff.org/instructions?os=snap&ws=nginx)。
+本附录使用 `certonly --nginx` 获取证书，再安装项目提供的代理配置：
+
+```bash
+snap install --classic certbot
+/snap/bin/certbot certonly --nginx --cert-name codex.example.com -d codex.example.com
+```
+
+按提示填写联系邮箱并阅读、接受服务条款。确认签发成功后，备份临时配置并安装模板：
+
+```bash
+cp /etc/nginx/sites-available/codex-anywhere /root/codex-anywhere-http-bootstrap.conf
+install -m 644 /root/codex-anywhere/deploy/nginx-example.conf /etc/nginx/sites-available/codex-anywhere
+nano /etc/nginx/sites-available/codex-anywhere
+```
+
+在配置中替换两个 `server_name` 的示例域名，并将证书路径改为：
+
+```nginx
+ssl_certificate /etc/letsencrypt/live/codex.example.com/fullchain.pem;
+ssl_certificate_key /etc/letsencrypt/live/codex.example.com/privkey.pem;
+```
+
+保留模板中的 `/ws` 精确匹配、HTTP/1.1、`Upgrade` / `Connection` 请求头和长连接超时。
+这些设置负责将 WSS 连接升级并转发到 Relay，参见 [Nginx WebSocket 代理文档](https://nginx.org/en/docs/http/websocket.html)。
+模板还覆盖客户端地址转发头，与参考 Compose 的 `BRIDGE_TRUST_PROXY=1` 配合；若在 Nginx 前再加一层代理，
+需要重新确定可信代理和真实客户端地址规则。
+
+```bash
+nginx -t && systemctl reload nginx
+curl --fail --silent --show-error https://codex.example.com/health
+```
+
+不要用 `curl -k` 忽略证书错误。若已持有云厂商签发的证书，可以跳过 Certbot，安装完整证书链和私钥，
+并自行安排续期与 Nginx reload；不要把私钥提交到 Git。
+
+`npm run build` 也会生成 Web 资源的 Brotli/gzip 版本，Relay 根据 `Accept-Encoding` 协商返回，普通代理即可
+转发已压缩的响应。更新后，在浏览器 Network 中检查 JavaScript 的实际 **GET** 请求是否包含
+`Content-Encoding: br` 或 `gzip`，且响应下载完整；仅健康检查成功不能证明大文件传输正常。若 Nginx 日志在
+`proxy_temp_path` 下报告权限错误，检查工作进程用户能否访问该目录及子目录；保留严格权限，不要开放全员写入。
+
+### F. 配对、WSS 验收和可选执行节点
+
+按正文“安装 Windows/Desktop 连接器”把 PC 连接到 `wss://codex.example.com/ws`，随后在 ECS 执行：
+
+```bash
+cd /root/codex-anywhere
+./scripts/relay.sh approve
+./scripts/relay.sh pair https://codex.example.com
+./scripts/relay.sh devices
+```
+
+配对链接只交给自己的浏览器。打开 HTTPS 页面完成配对，确认执行环境在线，并在自己的测试会话中发送消息、
+检查流式回复。浏览器开发者工具 Network → WS 中的 `/ws` 请求应返回 **101 Switching Protocols** 并持续收发帧。
+仅 `/health` 成功不能证明 WSS 升级和连接器认证成功，普通 `curl /ws` 也不是完整的 WebSocket 验收。
+
+如果 ECS 也要执行任务，再按正文“安装 7×24 Linux/ECS 连接器”安装 Node.js、认证 Codex CLI 和 systemd 服务，
+完成相同的批准与在线检查；仅作 Relay 时无需此步骤。浏览器扩展属于实验性附加特性，也不是基础部署的前提。
+
+### G. 自动续期、巡检和备份
+
+`certonly` 没有替你安装证书到 Nginx，需要配置续期成功后的 reload。创建部署钩子：
+
+```bash
+install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/codex-anywhere-nginx.sh <<'EOF'
+#!/bin/sh
+set -eu
+/usr/sbin/nginx -t
+/bin/systemctl reload nginx
+EOF
+chmod 755 /etc/letsencrypt/renewal-hooks/deploy/codex-anywhere-nginx.sh
+/snap/bin/certbot renew --dry-run --run-deploy-hooks
+systemctl list-timers --all | grep -i certbot
+```
+
+确认定时器有下次执行时间；snap 安装通常显示 `snap.certbot.renew.timer`。本流程使用 Nginx HTTP-01 验证，
+续期时仍需公网 80 可达；若无法开放 80，改用 DNS 服务商支持的自动 DNS 验证。续期机制和钩子参见
+[Certbot 使用指南](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates)。
+
+常用巡检命令：
+
+```bash
+cd /root/codex-anywhere
+./scripts/relay.sh status
+./scripts/relay.sh devices
+systemctl is-active docker nginx
+docker compose logs --tail 100 bridge
+tail -n 100 /var/log/nginx/codex-bridge-error.log
+/snap/bin/certbot certificates
+# 仅安装了 ECS Connector 时执行：
+systemctl status codex-anywhere-connector.service --no-pager
+```
+
+公网 HTTPS 超时先查 DNS 和入口端口；502 先查 Relay 的本机健康接口；页面正常而 WS 失败则检查 `/ws`
+升级头、代理超时和连接器状态。更新前备份当前提交、镜像、`.env`、Compose 数据卷中的设备注册表、
+连接器配置与身份文件，以及 Nginx 配置和 `/etc/letsencrypt`；这些私有备份应限制访问。保留业务会话、工作区和
+现有网络配置，等待任务空闲后再重启服务。应用更新参见正文“日常管理与升级”。
+
+## 电脑端审批等待的恢复（v0.4.3）
+
+出现“需要在电脑上批准”时，审批仍由 Codex 电脑端持有，Web 不会代为批准。可点击“在电脑端打开”，处理后点“刷新状态”；查询失败会自动重试，不能把状态未知当作审批已解决。
+
+当前 `main` 的紧凑提示使用刷新图标（标签为“刷新状态”）、“结束等待…”确认入口，以及归档通知中的“恢复”按钮。确认弹窗仍明确显示“停止等待并归档”。短文案不改变审批所有权和恢复流程。
+
+如果只想结束当前等待，点击“停止等待并归档”，确认后原生客户端终止该等待并保留会话。随后点击提示中的“恢复并打开”，回到同一会话继续发送消息。这个操作不执行待批准命令，不删除聊天记录；浏览器页面授权需要重新授予。恢复提示关闭或页面刷新后，仍可从 Codex 客户端的已归档列表恢复。普通运行中任务和未知状态仍不能借用这个入口强行取消。
+
+需要同时更新 Web 和 PC Connector 并实际重启 Connector。无需重新配对，不要通过关闭审批保护或删除会话数据库来解除等待。
+
+
+### Desktop 原生控制（2026-10-20）
+
+原生运行状态只订阅最近查看的会话，最多 4 个，60 秒没有读取就释放。检查 owner 身份与 revision 连续性；断线或缺失补丁会禁用相关控制，直到重新取得快照。原始快照不传到 Web，历史仍有界分页读取。上传原图验证后转为 `localImage` 输入，拒绝浏览器传来的任意本机路径。受支持的命令、文件和权限审批绑定 owner、请求 ID 及请求内容，操作前重新确认仍待审批，操作后确认请求消失；过大或未知类型仍在电脑端处理，不增加永久放行规则。明确的协议拒绝与结果不明分别报错，结果不明的修改不自动重试。
+
+电脑端权限修改通过现有 owner 的 `thread-follower-update-thread-settings` 完成，不由第二个 app-server 接管写入。仅允许空闲会话，校验 Web 读取时的配置并通过原生状态确认结果，不修改该环境的新建会话默认值。停止、审批和设置修改等待状态事件确认，超时最多补查一次快照。正文补丁不重复计算操作摘要；原生推送直接更新审批界面，并将校验轮询降为 15 秒。
+
+验收建议：在隔离真实会话中修改并恢复思考强度和 Fast，发送图片并检查无需工具的视觉回答，批准一次无副作用打印命令、拒绝另一个请求，并按确切 turnId 停止长任务。刷新 Web 后确认消息与图片仍可见。需同时更新 PC Connector 和 Relay Web 资源，无需重新配对。

@@ -1,0 +1,821 @@
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
+import { WebSocket } from 'ws';
+import { createBridgeServer, internals as serverInternals } from '../src/server/server.js';
+import { createConnectorAuthProof } from '../src/shared/auth.js';
+import { createDeviceAuthProof, createDeviceIdentity, type DeviceIdentity } from '../src/shared/device-auth.js';
+import type { DeviceRegistry } from '../src/server/device-registry.js';
+import { requireCurrentProtocol } from '../src/shared/protocol-contract.js';
+import { readDeviceActivity } from '../src/server/device-activity.js';
+import {
+  DEVICE_KEY_AUTH_CONTEXT,
+  browserPairingVerifier,
+  createBrowserPairingProof,
+} from '../src/shared/pairing-auth.js';
+
+const TOKEN = 'test-token-that-is-longer-than-32-characters';
+const CONNECTOR_TOKEN = 'connector-token-that-is-longer-than-32-characters';
+const nextJson = (socket) => once(socket, 'message').then(([data]) => JSON.parse(data.toString()));
+
+test('Relay releases a disconnected browser identity at each connector', async t => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  t.after(() => server.close());
+  const address = await server.listen(0, '127.0.0.1');
+  const url = `ws://127.0.0.1:${address!.port}/ws`;
+  const node = await authenticateSocket({ url, role: 'connector', token: TOKEN, deviceId: 'pc', registry: server.deviceRegistry });
+  const browser = await authenticateSocket({ url, role: 'client', registry: server.deviceRegistry });
+  const released = nextJson(node.socket);
+  browser.socket.close();
+  const frame = await released;
+  assert.equal(frame.type, 'client.disconnected');
+  assert.equal(frame.clientId, browser.auth.clientId);
+  node.socket.close();
+});
+
+test('Relay exposes approved offline names, renames across clients, and rejects another identity using an occupied route', async t => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  t.after(() => server.close());
+  const address = await server.listen(0, '127.0.0.1');
+  const url = `ws://127.0.0.1:${address!.port}/ws`;
+  const pc = await authenticateSocket({ url, role: 'connector', token: TOKEN, deviceId: 'pc', registry: server.deviceRegistry });
+  const other = await authenticateSocket({ url, role: 'connector', token: TOKEN, deviceId: 'other', registry: server.deviceRegistry });
+  other.socket.close(); await once(other.socket, 'close');
+  const browser = await authenticateSocket({ url, role: 'client', registry: server.deviceRegistry });
+  assert.deepEqual(browser.auth.devices, ['pc']);
+  assert.deepEqual(browser.auth.environments.map(entry => [entry.id, entry.online]), [['other', false], ['pc', true]]);
+  assert.equal(browser.auth.environments[0].publicKey, undefined);
+  const secondBrowser = await authenticateSocket({ url, role: 'client', registry: server.deviceRegistry });
+  const waitFrame = (socket: WebSocket, predicate: (frame: any) => boolean) => new Promise<any>(resolve => {
+    const listener = (data) => { const frame = JSON.parse(String(data)); if (predicate(frame)) { socket.off('message', listener); resolve(frame); } };
+    socket.on('message', listener);
+  });
+  const renamed = waitFrame(browser.socket, frame => frame.type === 'relay.response' && frame.requestId === 'rename');
+  const broadcast = waitFrame(secondBrowser.socket, frame => frame.type === 'presence'
+    && frame.environments.some(entry => entry.label === '家里电脑'));
+  browser.socket.send(JSON.stringify({ type: 'relay.request', requestId: 'rename', action: 'device.rename', payload: { deviceId: 'pc', label: '家里电脑' } }));
+  assert.equal((await renamed).ok, true);
+  await broadcast;
+  assert.equal(server.deviceRegistry.listApproved().find(entry => entry.routeDeviceId === 'pc')?.label, '家里电脑');
+  const impostor = await authenticateSocket({ url, role: 'connector', token: TOKEN, deviceId: 'pc',
+    identity: other.identity, registry: server.deviceRegistry });
+  assert.equal(impostor.auth.error, 'device_route_mismatch');
+  assert.equal(pc.socket.readyState, WebSocket.OPEN);
+  const pong = waitFrame(pc.socket, frame => frame.type === 'pong');
+  pc.socket.send('{"type":"ping"}'); await pong;
+  pc.socket.close(); browser.socket.close(); secondBrowser.socket.close(); impostor.socket.close();
+});
+
+test('server requires only the connector bootstrap credential', () => {
+  assert.throws(
+    () => createBridgeServer({ connectorToken: 'short' }),
+    /BRIDGE_CONNECTOR_TOKEN/,
+  );
+  assert.doesNotThrow(() => createBridgeServer({ connectorToken: CONNECTOR_TOKEN }));
+});
+
+async function openSocket(url: string, options = {}) {
+  const socket = new WebSocket(url, options);
+  const challengeMessage = nextJson(socket);
+  await once(socket, 'open');
+  const challenge = await challengeMessage;
+  assert.equal(challenge.type, 'auth.challenge');
+  assert.match(challenge.challenge, /^[a-f0-9]{64}$/);
+  assert.equal(challenge.deviceAuth, undefined);
+  return {
+    socket,
+    challenge: challenge.challenge as string,
+    protocol: challenge.protocol,
+    frameVersion: challenge.version,
+  };
+}
+
+async function authenticateSocket({
+  url, role, token, deviceId = '', options = {}, registry, identity = createDeviceIdentity(),
+}: {
+  url: string;
+  role: 'client' | 'connector';
+  token?: string;
+  deviceId?: string;
+  options?: ConstructorParameters<typeof WebSocket>[1];
+  registry: DeviceRegistry;
+  identity?: DeviceIdentity;
+}) {
+  if (!registry.isApproved(role, identity)) {
+    const registered = registry.requestPairing({
+      role,
+      routeDeviceId: role === 'connector' ? deviceId : undefined,
+      device: { id: identity.id, publicKey: identity.publicKey, signature: '0'.repeat(128), label: 'Test device' },
+      address: '127.0.0.1',
+    });
+    registry.approve(registered.requestId);
+  }
+  const opened = await openSocket(url, options);
+  const protocol = requireCurrentProtocol(opened.protocol);
+  if (role === 'connector') {
+    if (!token) throw new Error('connector token required');
+    const proof = createConnectorAuthProof(token, opened.challenge, deviceId);
+    opened.socket.send(JSON.stringify({
+      type: 'auth.connector', role, deviceId, proof,
+      device: createDeviceAuthProof(identity, {
+        challenge: opened.challenge, role, routeDeviceId: deviceId, authProof: proof,
+      }, 'Test device'),
+      protocol,
+    }));
+  } else {
+    opened.socket.send(JSON.stringify({
+      type: 'auth.device', role,
+      device: createDeviceAuthProof(identity, {
+        challenge: opened.challenge, role, authProof: DEVICE_KEY_AUTH_CONTEXT,
+      }, 'Test device'),
+      protocol,
+    }));
+  }
+  return { ...opened, auth: await nextJson(opened.socket), identity };
+}
+
+test('live Relay activity counts only authenticated sockets and follows ping, close and revocation', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'anywhere-live-activity-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let now = Date.now();
+  const server = createBridgeServer({ connectorToken: TOKEN, deviceRegistryPath: join(directory, 'devices.json'),
+    // Leave room for real pong delivery while parallel suites perform crypto
+    // and synchronous registry writes; this test measures activity, not latency.
+    clock: () => now, heartbeatIntervalMs: 1000 });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+  const unauthenticated = await openSocket(url);
+  unauthenticated.socket.pong();
+  assert.equal(readDeviceActivity(server.deviceActivity.path)!.devices.length, 0);
+  unauthenticated.socket.close();
+  const first = await authenticateSocket({ url, role: 'client', registry: server.deviceRegistry });
+  const second = await authenticateSocket({ url, role: 'client', registry: server.deviceRegistry, identity: first.identity });
+  const row = () => readDeviceActivity(server.deviceActivity.path)!.devices.find((device) => device.id === first.identity.id)!;
+  assert.equal(row().connections, 2);
+  now += 5000;
+  const pong = new Promise<void>((resolve) => second.socket.on('message', (data) => { if (JSON.parse(String(data)).type === 'pong') resolve(); }));
+  second.socket.send('{"type":"ping"}'); await pong;
+  server.deviceActivity.flush(); assert.equal(row().lastSeenAt, now);
+  first.socket.close(); await once(first.socket, 'close');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(row().connections, 1);
+  const revoked = once(second.socket, 'close');
+  server.deviceRegistry.remove('client', first.identity.id);
+  await revoked;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  server.deviceActivity.flush();
+  assert.equal(readDeviceActivity(server.deviceActivity.path)!.devices.length, 0);
+  const response = await fetch(`http://127.0.0.1:${address.port}/devices.json.activity.json`);
+  assert.doesNotMatch(await response.text(), new RegExp(first.identity.id));
+});
+
+test('activity keeps replacement Connector counts separate from a browser using the same identity', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+  const identity = createDeviceIdentity();
+  const browser = await authenticateSocket({ url, role: 'client', registry: server.deviceRegistry, identity });
+  const old = await authenticateSocket({ url, role: 'connector', token: TOKEN, deviceId: 'pc', registry: server.deviceRegistry, identity });
+  const closed = once(old.socket, 'close');
+  const replacement = await authenticateSocket({ url, role: 'connector', token: TOKEN, deviceId: 'pc', registry: server.deviceRegistry, identity });
+  await closed;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const devices = server.deviceActivity.snapshot().devices;
+  assert.equal(devices.find((device) => device.role === 'connector')!.connections, 1);
+  assert.equal(devices.find((device) => device.role === 'client')!.connections, 1);
+  browser.socket.close(); replacement.socket.close();
+});
+
+test('server requires the current protocol and rejects missing protocol metadata', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  const current = await authenticateSocket({
+    url, role: 'client', registry: server.deviceRegistry,
+  });
+  assert.equal(current.frameVersion, 4);
+  assert.equal(current.auth.protocol.version, 4);
+  assert.equal(current.auth.protocol.capabilities.includes('strict-protocol.v1'), true);
+  assert.equal(current.auth.protocol.capabilities.includes('browser-pairing.v1'), true);
+  assert.equal(current.auth.protocol.capabilities.includes('e2ee-channel.v1'), true);
+  current.socket.close();
+
+  const identity = createDeviceIdentity();
+  const opened = await openSocket(url);
+  const proof = '0'.repeat(64);
+  const closed = once(opened.socket, 'close');
+  opened.socket.send(JSON.stringify({
+    type: 'auth.response', role: 'client', proof,
+    device: createDeviceAuthProof(identity, {
+      challenge: opened.challenge, role: 'client', authProof: proof,
+    }, 'Outdated browser'),
+  }));
+  const [code] = await closed;
+  assert.equal(code, 4406);
+});
+
+test('one-time pairing enrolls a browser and approved device-key auth needs no shared token', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+  const identity = createDeviceIdentity();
+  const pairing = server.deviceRegistry.createBrowserPairing();
+  const verifier = browserPairingVerifier(pairing.credential.secret);
+
+  const enrollment = await openSocket(url);
+  const enrollmentProof = createBrowserPairingProof({
+    verifier,
+    challenge: enrollment.challenge,
+    pairingId: pairing.credential.id,
+    deviceId: identity.id,
+    publicKey: identity.publicKey,
+  });
+  enrollment.socket.send(JSON.stringify({
+    type: 'auth.enroll',
+    role: 'client',
+    pairingId: pairing.credential.id,
+    proof: enrollmentProof,
+    protocol: requireCurrentProtocol(enrollment.protocol),
+    device: createDeviceAuthProof(identity, {
+      challenge: enrollment.challenge,
+      role: 'client',
+      authProof: enrollmentProof,
+    }, 'Paired phone'),
+  }));
+  const enrolled = await nextJson(enrollment.socket);
+  assert.equal(enrolled.type, 'auth.ok');
+  assert.equal(enrolled.authMode, 'pairing');
+  assert.equal(server.deviceRegistry.isApproved('client', identity), true);
+  enrollment.socket.close();
+
+  const deviceLogin = await openSocket(url);
+  deviceLogin.socket.send(JSON.stringify({
+    type: 'auth.device',
+    role: 'client',
+    protocol: requireCurrentProtocol(deviceLogin.protocol),
+    device: createDeviceAuthProof(identity, {
+      challenge: deviceLogin.challenge,
+      role: 'client',
+      authProof: DEVICE_KEY_AUTH_CONTEXT,
+    }, 'Paired phone'),
+  }));
+  const authenticated = await nextJson(deviceLogin.socket);
+  assert.equal(authenticated.type, 'auth.ok');
+  assert.equal(authenticated.authMode, 'device');
+  deviceLogin.socket.close();
+
+  const replay = await openSocket(url);
+  const replayClose = once(replay.socket, 'close');
+  const replayProof = createBrowserPairingProof({
+    verifier,
+    challenge: replay.challenge,
+    pairingId: pairing.credential.id,
+    deviceId: identity.id,
+    publicKey: identity.publicKey,
+  });
+  replay.socket.send(JSON.stringify({
+    type: 'auth.enroll', role: 'client', pairingId: pairing.credential.id, proof: replayProof,
+    protocol: requireCurrentProtocol(replay.protocol),
+    device: createDeviceAuthProof(identity, {
+      challenge: replay.challenge, role: 'client', authProof: replayProof,
+    }),
+  }));
+  assert.equal((await replayClose)[0], 4003);
+});
+
+test('an unapproved device key cannot sign in or create a pending approval request', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const identity = createDeviceIdentity();
+  const opened = await openSocket(`ws://127.0.0.1:${address.port}/ws`);
+  const close = once(opened.socket, 'close');
+  opened.socket.send(JSON.stringify({
+    type: 'auth.device', role: 'client',
+    protocol: requireCurrentProtocol(opened.protocol),
+    device: createDeviceAuthProof(identity, {
+      challenge: opened.challenge, role: 'client', authProof: DEVICE_KEY_AUTH_CONTEXT,
+    }),
+  }));
+  const pairing = await nextJson(opened.socket);
+  assert.equal(pairing.type, 'auth.pairing');
+  assert.equal((await close)[0], 4403);
+  assert.equal(server.deviceRegistry.list().pending.length, 0);
+});
+
+test('server exposes a no-store runtime UI language configuration', async (t) => {
+  const server = createBridgeServer({
+    connectorToken: TOKEN,
+    uiLanguage: 'en-US',
+  });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/config.js`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.match(response.headers.get('content-type'), /^text\/javascript/);
+  const config = await response.text();
+  assert.match(config, /"locale":"en"/);
+});
+
+test('runtime UI language defaults to Chinese', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/config.js`);
+  assert.match(await response.text(), /"locale":"zh-CN"/);
+});
+
+test('server rejects unsafe HTTP methods and handles HEAD without a body', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const origin = `http://127.0.0.1:${address.port}`;
+
+  const rejected = await fetch(`${origin}/config.js`, { method: 'POST' });
+  assert.equal(rejected.status, 405);
+  assert.equal(rejected.headers.get('allow'), 'GET, HEAD');
+
+  const head = await fetch(`${origin}/config.js`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+  assert.ok(Number(head.headers.get('content-length')) > 0);
+});
+
+test('malformed encoded paths return 400 without stopping the relay', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const origin = `http://127.0.0.1:${address.port}`;
+
+  assert.equal((await fetch(`${origin}/%E0%A4%A`)).status, 400);
+  assert.equal((await fetch(`${origin}/health`)).status, 200);
+});
+
+test('static middleware serves assets and preserves SPA fallback caching', async (t) => {
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'bridge-static-test-'));
+  const publicDir = join(fixtureDir, 'public');
+  await mkdir(publicDir);
+  await writeFile(join(publicDir, 'index.html'), '<main>Codex Anywhere</main>');
+  await writeFile(join(publicDir, 'app.css'), 'body { color: white; }');
+  await writeFile(join(fixtureDir, 'private.txt'), 'must not be served');
+  const server = createBridgeServer({ connectorToken: TOKEN, publicDir });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(async () => {
+    await server.close();
+    await rm(fixtureDir, { recursive: true, force: true });
+  });
+  const origin = `http://127.0.0.1:${address.port}`;
+  const fetchOnce = (path: string) => fetch(`${origin}${path}`, { headers: { connection: 'close' } });
+
+  const page = await fetchOnce('/sessions/example');
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type'), /^text\/html/);
+  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.match(await page.text(), /Codex Anywhere/);
+
+  const asset = await fetchOnce('/app.css');
+  assert.equal(asset.status, 200);
+  assert.match(asset.headers.get('content-type'), /^text\/css/);
+  assert.equal(asset.headers.get('cache-control'), 'public, max-age=3600');
+  assert.match(await asset.text(), /color: white/);
+
+  const missingAsset = await fetchOnce('/missing.js');
+  assert.equal(missingAsset.status, 404);
+  await missingAsset.arrayBuffer();
+  const traversalAttempt = await fetchOnce('/..%2fprivate.txt');
+  assert.equal(traversalAttempt.status, 200);
+  const traversalBody = await traversalAttempt.text();
+  assert.match(traversalBody, /Codex Anywhere/);
+  assert.doesNotMatch(traversalBody, /must not be served/);
+});
+
+test('static compression negotiates encodings without changing asset bytes or HTML caching', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'bridge-compressed-static-'));
+  const source = 'console.log("压缩静态资源");\n'.repeat(100);
+  await writeFile(join(directory, 'index.html'), '<main>hello</main>');
+  await writeFile(join(directory, 'app.js'), source);
+  await writeFile(join(directory, 'app.js.gz'), gzipSync(source));
+  await writeFile(join(directory, 'app.js.br'), brotliCompressSync(Buffer.from(source)));
+  const server = createBridgeServer({ connectorToken: TOKEN, publicDir: directory });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(async () => { await server.close(); await rm(directory, { recursive: true, force: true }); });
+  const origin = `http://127.0.0.1:${address.port}`;
+  for (const encoding of ['identity', 'gzip', 'br']) {
+    const response = await fetch(`${origin}/app.js`, { headers: { 'accept-encoding': encoding } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-encoding'), encoding === 'identity' ? null : encoding);
+    assert.match(response.headers.get('content-type') || '', /javascript/);
+    assert.match(response.headers.get('vary') || '', /Accept-Encoding/i);
+    assert.equal(response.headers.get('cache-control'), 'public, max-age=3600');
+    assert.equal(await response.text(), source);
+    if (encoding !== 'identity') assert.ok(Number(response.headers.get('content-length')) < Buffer.byteLength(source));
+  }
+  const page = await fetch(`${origin}/sessions/example`, { headers: { 'accept-encoding': 'br, gzip' } });
+  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.equal(await page.text(), '<main>hello</main>');
+});
+
+test('content security policy limits WebSocket connections to the current host', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN, trustProxy: true });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/`, {
+    headers: { connection: 'close', host: 'codex.example.com', 'x-forwarded-proto': 'https' },
+  });
+  const policy = response.headers.get('content-security-policy');
+  assert.match(policy, new RegExp(`connect-src 'self' wss:\\/\\/127\\.0\\.0\\.1:${address.port};`));
+  const connectSources = policy.split(';').find((directive) => directive.trim().startsWith('connect-src'))
+    .trim().split(/\s+/).slice(1);
+  assert.equal(connectSources.includes('ws:'), false);
+  assert.equal(connectSources.includes('wss:'), false);
+  assert.match(policy, /frame-src 'self' blob:;/);
+  assert.equal(response.headers.get('permissions-policy'), 'camera=(self), microphone=(), geolocation=()');
+  await response.arrayBuffer();
+});
+
+test('server authenticates current devices and rejects plaintext application frames', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  const sockets: WebSocket[] = [];
+  t.after(() => { for (const socket of sockets) socket.terminate(); return server.close(); });
+  // Presence is an independent push; it can arrive between any two replies.
+  const nextReply = (socket: WebSocket) => new Promise<any>(resolve => {
+    const listener = (data: any) => {
+      const frame = JSON.parse(String(data));
+      if (frame.type === 'presence') return;
+      socket.off('message', listener); resolve(frame);
+    };
+    socket.on('message', listener);
+  });
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  const connectorConnection = await authenticateSocket({
+    url, role: 'connector', token: TOKEN, deviceId: 'personal-pc', registry: server.deviceRegistry,
+  });
+  const connector = connectorConnection.socket;
+  sockets.push(connector);
+  assert.equal(connectorConnection.auth.type, 'auth.ok');
+
+  const clientConnection = await authenticateSocket({
+    url, role: 'client', registry: server.deviceRegistry,
+  });
+  const client = clientConnection.socket;
+  sockets.push(client);
+  const auth = clientConnection.auth;
+  assert.equal(auth.type, 'auth.ok');
+  assert.equal(auth.identityId, undefined);
+  assert.deepEqual(auth.devices, ['personal-pc']);
+  assert.equal(auth.secureDevices, undefined);
+
+  const pongReply = nextReply(client);
+  client.send(JSON.stringify({ type: 'ping', at: 123 }));
+  const pong = await pongReply;
+  assert.equal(pong.type, 'pong');
+  assert.equal(typeof pong.at, 'number');
+
+  const rejectionReply = nextReply(client);
+  client.send(JSON.stringify({ type: 'request', requestId: 'r1', action: 'connector.status', deviceId: 'personal-pc', payload: {} }));
+  const rejected = await rejectionReply;
+  assert.equal(rejected.requestId, 'r1');
+  assert.equal(rejected.error, 'secure_channel_required');
+  connector.close();
+  client.close();
+});
+
+test('server routes secure-channel control and ciphertext frames without reading their payload', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  const connectorConnection = await authenticateSocket({
+    url, role: 'connector', token: TOKEN, deviceId: 'personal-pc', registry: server.deviceRegistry,
+  });
+  const clientConnection = await authenticateSocket({
+    url, role: 'client', registry: server.deviceRegistry,
+  });
+  const offer = {
+    initiator: {
+      id: clientConnection.identity.id,
+      publicKey: clientConnection.identity.publicKey,
+      ephemeralPublicKey: 'a'.repeat(43),
+    },
+    opaque: 'relay-must-not-interpret-this',
+  };
+  clientConnection.socket.send(JSON.stringify({
+    type: 'channel.offer', deviceId: 'personal-pc', offer,
+  }));
+  const routedOffer = await nextJson(connectorConnection.socket);
+  assert.equal(routedOffer.type, 'channel.offer');
+  assert.deepEqual(routedOffer.offer, offer);
+  assert.ok(routedOffer.clientId);
+
+  const accept = {
+    transcript: {
+      responder: {
+        id: connectorConnection.identity.id,
+        publicKey: connectorConnection.identity.publicKey,
+      },
+    },
+    opaque: 'still-not-relay-readable',
+  };
+  connectorConnection.socket.send(JSON.stringify({
+    type: 'channel.accept', clientId: routedOffer.clientId, accept,
+  }));
+  const routedAccept = await nextJson(clientConnection.socket);
+  assert.equal(routedAccept.type, 'channel.accept');
+  assert.deepEqual(routedAccept.accept, accept);
+  assert.equal(routedAccept.clientId, undefined);
+  assert.equal(routedAccept.deviceId, 'personal-pc');
+
+  const encryptedRequest = { channelId: 'opaque', ciphertext: 'browser-ciphertext' };
+  clientConnection.socket.send(JSON.stringify({
+    type: 'secure', deviceId: 'personal-pc', envelope: encryptedRequest,
+  }));
+  const routedRequest = await nextJson(connectorConnection.socket);
+  assert.deepEqual(routedRequest.envelope, encryptedRequest);
+  assert.equal(routedRequest.clientId, routedOffer.clientId);
+
+  const encryptedResponse = { channelId: 'opaque', ciphertext: 'connector-ciphertext' };
+  connectorConnection.socket.send(JSON.stringify({
+    type: 'secure', clientId: routedOffer.clientId, envelope: encryptedResponse,
+  }));
+  const routedResponse = await nextJson(clientConnection.socket);
+  assert.deepEqual(routedResponse.envelope, encryptedResponse);
+  assert.equal(routedResponse.clientId, undefined);
+
+  connectorConnection.socket.close();
+  clientConnection.socket.close();
+});
+
+test('server advertises and independently routes multiple connector environments', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  const local = await authenticateSocket({
+    url, role: 'connector', token: TOKEN, deviceId: 'personal-pc', registry: server.deviceRegistry,
+  });
+  const ecs = await authenticateSocket({
+    url, role: 'connector', token: TOKEN, deviceId: 'ecs', registry: server.deviceRegistry,
+  });
+  const browser = await authenticateSocket({ url, role: 'client', registry: server.deviceRegistry });
+  assert.deepEqual(browser.auth.devices, ['ecs', 'personal-pc']);
+
+  browser.socket.send(JSON.stringify({
+    type: 'channel.offer', deviceId: 'personal-pc',
+    offer: { initiator: browser.identity, marker: 'local' },
+  }));
+  browser.socket.send(JSON.stringify({
+    type: 'channel.offer', deviceId: 'ecs',
+    offer: { initiator: browser.identity, marker: 'ecs' },
+  }));
+  assert.equal((await nextJson(local.socket)).offer.marker, 'local');
+  assert.equal((await nextJson(ecs.socket)).offer.marker, 'ecs');
+
+  local.socket.close();
+  ecs.socket.close();
+  browser.socket.close();
+});
+
+test('browser shared-token authentication is not supported', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+  const identity = createDeviceIdentity();
+  const opened = await openSocket(url);
+  const proof = '0'.repeat(64);
+  const close = once(opened.socket, 'close');
+  opened.socket.send(JSON.stringify({
+    type: 'auth.response', role: 'client', proof,
+    protocol: requireCurrentProtocol(opened.protocol),
+    device: createDeviceAuthProof(identity, {
+      challenge: opened.challenge, role: 'client', authProof: proof,
+    }, 'Unapproved browser'),
+  }));
+  assert.equal((await close)[0], 4406);
+  const inventory = server.deviceRegistry.list();
+  assert.equal(inventory.approved.length, 0);
+  assert.equal(inventory.pending.length, 0);
+});
+
+test('revoking a device closes its active socket on the next relay heartbeat', async (t) => {
+  const server = createBridgeServer({
+    connectorToken: TOKEN,
+    heartbeatIntervalMs: 20,
+  });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const connection = await authenticateSocket({
+    url: `ws://127.0.0.1:${address.port}/ws`,
+    role: 'client',
+    registry: server.deviceRegistry,
+  });
+  assert.equal(connection.auth.type, 'auth.ok');
+
+  const closed = once(connection.socket, 'close');
+  assert.equal(server.deviceRegistry.remove('client', connection.identity.id), true);
+  const [code] = await closed;
+  assert.equal(code, 4403);
+});
+
+test('authenticated browsers cannot query the device registry outside the secure channel', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+  const browser = await authenticateSocket({
+    url, role: 'client', registry: server.deviceRegistry,
+  });
+  // Authentication can enqueue a presence frame before this request's error.
+  const rejection = new Promise<any>((resolve) => {
+    const listener = (data) => {
+      const frame = JSON.parse(data.toString());
+      if (frame.type === 'presence') return;
+      browser.socket.off('message', listener);
+      resolve(frame);
+    };
+    browser.socket.on('message', listener);
+  });
+  browser.socket.send(JSON.stringify({
+    type: 'request', requestId: 'list-devices', action: 'devices.list', payload: {},
+  }));
+  const rejected = await rejection;
+  assert.equal(rejected.type, 'error');
+  assert.equal(rejected.error, 'secure_channel_required');
+  assert.equal(rejected.data, undefined);
+  browser.socket.close();
+});
+
+test('server temporarily locks repeated authentication failures per real client address', async (t) => {
+  const server = createBridgeServer({
+    connectorToken: TOKEN,
+    trustProxy: true,
+    authFailureLimit: 2,
+    authFailureWindowMs: 60_000,
+    authLockMs: 60_000,
+  });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  async function failAuthentication(clientAddress) {
+    const identity = createDeviceIdentity();
+    const { socket, challenge, protocol } = await openSocket(url, { headers: { 'x-real-ip': clientAddress } });
+    const close = once(socket, 'close');
+    const proof = '0'.repeat(64);
+    socket.send(JSON.stringify({
+      type: 'auth.enroll', role: 'client', pairingId: 'a'.repeat(16), proof,
+      protocol: requireCurrentProtocol(protocol),
+      device: createDeviceAuthProof(identity, {
+        challenge, role: 'client', authProof: proof,
+      }),
+    }));
+    return { socket, close };
+  }
+
+  const first = await failAuthentication('203.0.113.10');
+  assert.equal((await first.close)[0], 4003);
+  const second = await failAuthentication('203.0.113.10');
+  assert.equal((await second.close)[0], 4429);
+
+  const lockedSocket = new WebSocket(url, { headers: { 'x-real-ip': '203.0.113.10' } });
+  const lockedClose = once(lockedSocket, 'close');
+  await once(lockedSocket, 'open');
+  assert.equal((await lockedClose)[0], 4429);
+
+  const otherAddress = await authenticateSocket({
+    url, role: 'client', registry: server.deviceRegistry,
+    options: { headers: { 'x-real-ip': '203.0.113.11' } },
+  });
+  assert.equal(otherAddress.auth.type, 'auth.ok');
+  otherAddress.socket.close();
+});
+
+test('server rejects raw bearer tokens and captured device-proof replay', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  const raw = await openSocket(url);
+  const rawClose = once(raw.socket, 'close');
+  raw.socket.send(JSON.stringify({ type: 'auth', role: 'client', token: TOKEN }));
+  assert.equal((await rawClose)[0], 4406);
+
+  const identity = createDeviceIdentity();
+  const requested = server.deviceRegistry.requestPairing({
+    role: 'client',
+    device: { id: identity.id, publicKey: identity.publicKey, signature: '0'.repeat(128) },
+    address: '127.0.0.1',
+  });
+  server.deviceRegistry.approve(requested.requestId);
+  const first = await openSocket(url);
+  const capturedDevice = createDeviceAuthProof(identity, {
+    challenge: first.challenge, role: 'client', authProof: DEVICE_KEY_AUTH_CONTEXT,
+  });
+  first.socket.close();
+
+  const second = await openSocket(url);
+  assert.notEqual(first.challenge, second.challenge);
+  const replayClose = once(second.socket, 'close');
+  second.socket.send(JSON.stringify({
+    type: 'auth.device', role: 'client', device: capturedDevice,
+    protocol: requireCurrentProtocol(second.protocol),
+  }));
+  assert.equal((await replayClose)[0], 4407);
+});
+
+test('the connector credential cannot authenticate a browser', async (t) => {
+  const server = createBridgeServer({ connectorToken: CONNECTOR_TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  const connector = await authenticateSocket({
+    url, role: 'connector', token: CONNECTOR_TOKEN, deviceId: 'personal-pc', registry: server.deviceRegistry,
+  });
+  assert.equal(connector.auth.type, 'auth.ok');
+
+  const impostor = await openSocket(url);
+  const close = once(impostor.socket, 'close');
+  impostor.socket.send(JSON.stringify({
+    type: 'auth.connector', role: 'connector', deviceId: 'personal-pc',
+    protocol: requireCurrentProtocol(impostor.protocol),
+    proof: createConnectorAuthProof('wrong-connector-token-that-is-long-enough', impostor.challenge, 'personal-pc'),
+  }));
+  assert.equal((await close)[0], 4003);
+  assert.equal(server.connectors.size, 1);
+  assert.equal(connector.socket.readyState, WebSocket.OPEN);
+
+  const clientImpostor = await openSocket(url);
+  const clientClose = once(clientImpostor.socket, 'close');
+  clientImpostor.socket.send(JSON.stringify({
+    type: 'auth.response', role: 'client',
+    protocol: requireCurrentProtocol(clientImpostor.protocol),
+    proof: createConnectorAuthProof(CONNECTOR_TOKEN, clientImpostor.challenge, 'personal-pc'),
+  }));
+  assert.equal((await clientClose)[0], 4406);
+  connector.socket.close();
+});
+
+test('authenticated sockets expire and can reconnect with a fresh proof', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN, sessionMaxAgeMs: 40 });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const url = `ws://127.0.0.1:${address.port}/ws`;
+
+  const identity = createDeviceIdentity();
+  const first = await authenticateSocket({
+    url, role: 'client', registry: server.deviceRegistry, identity,
+  });
+  const firstClose = once(first.socket, 'close');
+  assert.equal((await firstClose)[0], 4005);
+  const second = await authenticateSocket({
+    url, role: 'client', registry: server.deviceRegistry, identity,
+  });
+  assert.equal(second.auth.type, 'auth.ok');
+  second.socket.close();
+});
+
+test('authentication failure tracking is bounded and evicts the stalest address', () => {
+  const { AuthFailureLimiter } = serverInternals;
+  const limiter = new AuthFailureLimiter({ maxEntries: 3, limit: 8 });
+  limiter.recordFailure('203.0.113.1');
+  limiter.recordFailure('203.0.113.2');
+  limiter.recordFailure('203.0.113.3');
+  limiter.recordFailure('203.0.113.1');
+  limiter.recordFailure('203.0.113.4');
+  assert.equal(limiter.entries.size, 3);
+  assert.equal(limiter.entries.has('203.0.113.1'), true);
+  assert.equal(limiter.entries.has('203.0.113.2'), false);
+  assert.equal(limiter.entries.has('203.0.113.3'), true);
+  assert.equal(limiter.entries.has('203.0.113.4'), true);
+});
+
+test('server rejects browser WebSocket connections from another origin', async (t) => {
+  const server = createBridgeServer({ connectorToken: TOKEN });
+  const address = await server.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+    headers: { origin: 'https://attacker.example' },
+  });
+  const [, response] = await once(socket, 'unexpected-response');
+  assert.equal(response.statusCode, 403);
+  response.resume();
+});

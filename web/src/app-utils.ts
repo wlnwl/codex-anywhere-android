@@ -1,0 +1,305 @@
+import { dateLocale, t } from './i18n';
+import type { ExecutionState, FollowState, Session } from './app-types';
+
+export const makeId = () => crypto.randomUUID();
+
+export function presenceLabel(online: boolean, state: ExecutionState, fallback: string) {
+  if (!online) return fallback || t('当前执行环境离线', 'Current environment offline');
+  if (state === 'waiting') return t('正在等待桌面会话空闲', 'Waiting for the desktop session');
+  if (state === 'running') return t('Codex 正在执行', 'Codex is running');
+  if (state === 'failed') return t('本轮执行失败', 'Run failed');
+  if (state === 'completed') return t('本轮执行完成', 'Run completed');
+  return fallback || t('已连接', 'Connected');
+}
+
+export function followLabel(state: FollowState) {
+  if (state === 'following') return t('实时跟随', 'Following live');
+  if (state === 'checking') return t('检查进度', 'Checking progress');
+  if (state === 'error') return t('跟随重试中', 'Retrying follow');
+  return t('已同步', 'Synced');
+}
+
+export function friendlyError(error: unknown) {
+  const deletionErrors: Record<string, string> = {
+    session_delete_turn_active: t('该会话仍在运行，请先停止任务或等待完成后再删除。', 'Stop this session or wait for it to finish before deleting it.'),
+    session_delete_in_progress: t('该会话正在删除，请稍候。', 'This session is being deleted. Please wait.'),
+    session_delete_headless_only: t('只能删除 ECS 会话，电脑端会话请在电脑上管理。', 'Only headless sessions can be deleted here. Manage Desktop sessions on your computer.'),
+    session_delete_confirmation_required: t('请先确认删除此会话。', 'Confirm session deletion first.'),
+    session_delete_status_unknown: t('暂时无法确认会话状态，请刷新后再删除。', 'Session status is unknown. Refresh before deleting.'),
+  };
+  const deletionError = deletionErrors[error instanceof Error ? error.message : String(error)];
+  if (deletionError) return deletionError;
+  const message = error instanceof Error ? error.message : String(error || t('请求失败', 'Request failed'));
+  if (message === 'session_archive_not_idle') return t('会话仍在运行、等待处理或状态未知，请确认空闲后再归档。', 'The task is running, waiting, or its status is unknown. Archive it when idle.');
+  if (message === 'session_archive_unsupported') return t('当前节点不支持归档，请更新 PC 连接器。', 'Archiving is unavailable. Update the PC connector.');
+  if (message === 'session_archive_environment_changed') return t('执行环境已切换，请关闭此窗口并重新选择会话。', 'The environment changed. Close this dialog and select the session again.');
+  if (message === 'desktop_thread_archive_failed') return t('桌面端未确认归档，请刷新会话列表后重试。', 'Desktop did not confirm the archive. Refresh the session list and retry.');
+  if (message === 'desktop_thread_restore_failed') return t('电脑端未确认恢复，会话仍可从 Codex 客户端的已归档列表恢复。', 'Desktop did not confirm restoration. You can still restore from archived chats in Codex Desktop.');
+  if (message === 'session_restore_unsupported') return t('当前连接器不支持恢复，请更新 PC 连接器或在 Codex 客户端恢复。', 'Update the PC connector or restore in Codex Desktop.');
+  if (message === 'connector_offline') return t('当前执行环境离线，请确认对应连接器正在运行。', 'The current environment is offline. Make sure its connector is running.');
+  if (message === 'another_turn_is_active') return t('当前会话正在启动或执行任务，请稍后追加消息或先停止。', 'This session already has an active turn. Steer it when ready or stop it first.');
+  if (message === 'desktop_first_turn_busy') return t('电脑端另一个新会话的首轮仍在执行，请等它完成后再新建。', 'Another Desktop task is completing its first turn. Wait before creating another task.');
+  if (message === 'turn_stop_mismatch') return t('运行状态已经变化，请刷新后重试。', 'The run state changed. Refresh and try again.');
+  if (message === 'project_directory_required') return t('新会话必须选择或填写项目目录。', 'Choose or enter a project directory for the new session.');
+  if (message === 'session_project_directory_unavailable') return t('该会话没有可用的项目目录，无法通过连接器继续。', 'This session has no project directory available to the connector.');
+  if (message === 'workspace_outside_allowed_root') return t('该目录不在连接器允许访问的范围内。', 'This directory is outside the connector allowed roots.');
+  if (message === 'request_timeout') {
+    const timeoutMs = error instanceof Error && 'timeoutMs' in error ? error.timeoutMs : undefined;
+    if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      const seconds = Math.ceil(timeoutMs / 1000);
+      return t(`请求超过 ${seconds} 秒没有响应，请稍后重试。`, `The request timed out after ${seconds} seconds. Try again shortly.`);
+    }
+    return t('请求超时，请稍后重试。', 'The request timed out. Try again shortly.');
+  }
+  if (message === 'message_edit_busy') return t('会话正在运行，请结束后再编辑。', 'Wait until the session is idle before editing.');
+  if (message === 'message_edit_changed') return t('消息记录已变化，请刷新后重新编辑。', 'History changed. Refresh before editing again.');
+  if (message === 'message_edit_unsupported') return t('这条消息含多个输入或特殊上下文，暂不支持编辑。', 'This message has multiple inputs or special context and cannot be edited.');
+  if (message === 'message_edit_unavailable') return t('暂时无法读取这条消息，请刷新后重试。', 'This message is unavailable. Refresh and try again.');
+  if (message === 'message_edit_reverted_send_failed') return t('历史已撤回，但重发未确认。请核对最新记录，避免重复发送。', 'History was reverted, but delivery is unconfirmed. Check the latest history before retrying.');
+  if (message === 'message_edit_unconfirmed') return t('未能确认编辑结果，请先核对最新记录。', 'The edit result is unconfirmed. Check the latest history first.');
+  if (message === 'message_edit_invalid') return t('请填写有效的消息并确认重发。', 'Enter a valid message and confirm the resend.');
+  if (message === 'turn_start_timeout') return t('等待原会话可写超时，消息没有发送，已恢复到输入框。', 'Timed out waiting for the session to become writable. The message was not sent and has been restored.');
+  if (message === 'desktop_delivery_unknown' || message === 'desktop_delivery_timeout') return t('消息可能已经送达，但桌面 Codex 的确认丢失。请先查看会话中的消息和回复，确认未送达后再重试，避免重复发送。', 'The message may have arrived, but confirmation from Codex Desktop was lost. Check the conversation before retrying to avoid sending it twice.');
+  if (message.startsWith('desktop_tool_unavailable:')) return t('当前桌面 Codex 不支持此操作，请更新桌面应用后重试。', 'This Codex Desktop host does not support this action. Update the desktop app and try again.');
+  if (message === 'desktop_request_too_large') return t('消息超过桌面通道大小限制，尚未发送。请缩短内容后重试。', 'The message exceeds the desktop channel size limit and was not sent. Shorten it and try again.');
+  if (message === 'desktop_input_unavailable') return t('桌面原生输入通道尚未就绪。请打开目标会话并确认 Codex 已更新后重试。', 'Desktop native input is not ready. Open the target chat and check your Codex version before retrying.');
+  if (message === 'desktop_input_unsupported') return t('当前 Codex 版本不支持此原生操作，需要更新 Connector 的协议适配。', 'This Codex version does not support this native operation. Update the Connector protocol adapter.');
+  if (message === 'desktop_input_not_ready' || message.startsWith('desktop_state_')) return t('暂时无法读取桌面会话状态，请在电脑上打开该会话后重试。', 'Desktop chat state is unavailable. Open the chat on your computer and retry.');
+  if (message === 'desktop_settings_changed') return t('桌面设置已变化，未能确认本次修改。请刷新后检查设置。', 'Desktop settings changed. Refresh and check the current settings.');
+  if (message === 'desktop_permissions_unavailable') return t('暂时无法确认桌面权限，请稍后刷新。', 'Desktop permissions could not be confirmed. Refresh and try again.');
+  if (message === 'desktop_turn_changed' || message === 'desktop_turn_id_required') return t('当前轮次已变化，请刷新状态后再停止。', 'The active turn changed. Refresh its state before stopping.');
+  if (message === 'desktop_approval_expired') return t('此审批已失效或已在电脑上处理，请刷新当前请求。', 'This approval expired or was handled on your computer. Refresh the pending request.');
+  if (['desktop_operation_unknown', 'desktop_settings_unconfirmed', 'desktop_approval_unconfirmed', 'desktop_stop_unconfirmed'].includes(message)) return t('操作可能已执行，但尚未确认结果。请刷新状态后检查，勿重复操作。', 'The operation may have executed but is not yet confirmed. Refresh and check its result before retrying.');
+  if (message === 'desktop_input_settings_failed') return t('未能同步桌面会话的模型设置，消息尚未发送。请刷新会话后重试。', 'Could not synchronize Desktop model settings. The message was not sent. Refresh the chat and try again.');
+  if (message === 'desktop_app_unavailable') return t('桌面 Codex 当前不可用，请打开桌面应用后重试。', 'Codex Desktop is unavailable. Open it and try again.');
+  if (message === 'desktop_thread_open_failed') return t('未能在电脑端打开此会话，请确认 Codex 桌面应用可用后重试。', 'Could not open this task on the computer. Make sure Codex Desktop is available and try again.');
+  if (message === 'desktop_thread_identity_mismatch') return t('已阻止操作：会话身份不一致。请更新 PC 连接器后重试，消息不会转发到其他会话。', 'Operation blocked: task identities do not match. Update the PC connector and retry; the message will not be forwarded to another task.');
+  if (message === 'session_name_required') return t('请输入会话名称。', 'Enter a session name.');
+  if (message === 'session_name_too_long') return t('会话名称不能超过 100 个字符。', 'Session names cannot exceed 100 characters.');
+  if (message === 'session_name_invalid') return t('会话名称包含不支持的控制字符。', 'The session name contains unsupported control characters.');
+  if (message === 'desktop_rename_timeout') return t('桌面 Codex 没有及时确认改名，请稍后重试。', 'Codex Desktop did not confirm the rename in time. Try again shortly.');
+  if (message.startsWith('desktop_rename_failed:')) return t('桌面 Codex 未能修改会话名称，请确认桌面应用可用后重试。', 'Codex Desktop could not rename the task. Make sure the desktop app is available and try again.');
+  if (message === 'session_delivery_mismatch') return t('桌面返回了不同的会话标识，页面已阻止自动切换。请刷新会话列表后重试。', 'Desktop returned a different session ID, so the page blocked the automatic switch. Refresh the session list and try again.');
+  if (message === 'model_config_turn_active') return t('当前任务仍在执行，完成后再修改模型配置。', 'Wait for the current run to finish before changing model settings.');
+  if (message === 'model_not_available') return t('所选模型当前不可用，请重新选择。', 'The selected model is unavailable. Choose another model.');
+  if (message === 'reasoning_effort_not_available') return t('当前模型不支持所选思考强度。', 'This model does not support the selected reasoning effort.');
+  if (message === 'fast_mode_not_available') return t('当前模型不支持快速模式。', 'Fast mode is not available for this model.');
+  if (message === 'permission_mode_turn_active') return t('当前任务仍在执行，完成后再修改权限。', 'Wait for the current run to finish before changing permissions.');
+  if (message === 'permission_mode_invalid') return t('权限模式无效，请刷新页面后重试。', 'The permission mode is invalid. Refresh and try again.');
+  if (message === 'full_access_not_allowed') return t('此执行节点未开放完全访问，请先由节点管理员显式启用。', 'Full access is not enabled on this connector. The connector operator must enable it first.');
+  if (message === 'permission_mode_managed_on_computer' || message === 'desktop_permission_mode_managed_on_computer') return t('该会话的权限由 Codex 电脑端管理，请在电脑上修改。', 'This task’s permissions are managed by Codex Desktop. Change them on the computer.');
+  if (message === 'desktop_required_for_large_session') return t('这是一个超大会话，需要桌面 Codex 打开后才能安全发送到原会话。', 'This large session requires Codex Desktop to be open before a message can be delivered safely.');
+  if (message === 'attachment_type_not_allowed') return t('只支持 JPG、PNG 和 WebP 图片。', 'Only JPG, PNG, and WebP images are supported.');
+  if (message === 'file_upload_too_large') return t('单个文件不能超过 100 MB。', 'Each file must be 100 MB or smaller.');
+  if (message === 'file_upload_unsupported') return t('当前执行端尚不支持文件上传，请更新连接器。', 'Update this environment’s connector to enable file uploads.');
+  if (message === 'file_upload_limit') return t('正在上传的文件过多，请稍后重试。', 'Too many uploads are in progress. Try again shortly.');
+  if (/^file_upload_(expired|not_found|offset_mismatch|changed|protocol_error|write_failed|busy)$/.test(message)) return t('文件上传未完成，请重新发送。', 'The file upload did not complete. Please send it again.');
+  if (message === 'attachment_too_large') return t('图片处理后仍超过 4 MB，请换一张更小的图片。', 'The processed image is still larger than 4 MB. Choose a smaller image.');
+  if (message === 'attachment_invalid_base64' || message === 'attachment_size_mismatch' || message === 'attachment_content_mismatch') {
+    return t('图片内容校验失败，请重新选择后再试。', 'Image validation failed. Select the image again and retry.');
+  }
+  if (message === 'download_file_not_found') return t('执行环境中的文件不存在，可能已被移动或删除。', 'The file does not exist in the execution environment; it may have been moved or deleted.');
+  if (message === 'download_not_a_file') return t('该链接不是可下载的普通文件。', 'This link does not point to a downloadable regular file.');
+  if (message === 'download_path_not_allowed') return t('该文件不在连接器允许下载的目录中。', 'The file is outside the connector download roots.');
+  if (message === 'download_file_changed') return t('文件在下载过程中发生变化，请重新点击下载。', 'The file changed during download. Click the link again.');
+  if (message === 'download_capability_invalid') return t('下载授权已失效或不属于当前页面，请重新点击文件链接。', 'The download permission expired or belongs to another page. Click the file link again.');
+  if (message === 'download_rate_limited') return t('下载请求过快，请稍后重新点击文件链接。', 'Download requests are too frequent. Wait and click the file link again.');
+  if (message === 'download_confirmation_required') return t('需要在当前页面确认后才能下载执行环境中的文件。', 'Confirm the download from the execution environment on this page first.');
+  if (message.startsWith('download_')) return t('文件下载失败，请检查当前执行环境的连接后重试。', 'File download failed. Check the current environment connection and retry.');
+  if (/already has an active writer/i.test(message)) {
+    return t(
+      '当前会话仍在桌面 Codex 中执行，暂时无法从手机插入消息。消息已保留在输入框，请稍后重试。',
+      'Codex Desktop is still running this task, so a mobile message cannot be inserted yet. The message remains in the composer; try again shortly.',
+    );
+  }
+  if (message.startsWith('desktop_delivery_failed:')) {
+    const detail = message.slice('desktop_delivery_failed:'.length);
+    return t(`桌面 Codex 未接收这条消息：${detail}`, `Codex Desktop did not receive this message: ${detail}`);
+  }
+  if (message === 'thread_active_writer_conflict') {
+    return t('无法通过桌面通道直接发送，消息没有进入排队。请确认桌面 Codex 在线后重试。', 'Direct Desktop delivery is unavailable and the message was not queued. Confirm Codex Desktop is online, then retry.');
+  }
+  return message;
+}
+
+export function isConnectionInterruption(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /^(?:连接已断开|连接未建立|Connection closed|Connection is not established)$/i.test(message.trim());
+}
+
+export function replayPendingFrames(
+  pending: Iterable<{ frame: Record<string, unknown> }>,
+  send: (frame: Record<string, unknown>) => boolean,
+) {
+  let replayed = 0;
+  for (const item of pending) {
+    if (!send(item.frame)) break;
+    replayed += 1;
+  }
+  return replayed;
+}
+
+export function shortId(value: string) {
+  return value.length > 20 ? `${value.slice(0, 12)}…${value.slice(-6)}` : value;
+}
+
+export function isSessionRunning(status?: string) {
+  return /^(?:active|running|inProgress|waiting)$/i.test(String(status || ''));
+}
+
+export type SessionAttentionState = Record<string, 'running' | 'unread'>;
+
+export function reconcileSessionAttention(
+  current: SessionAttentionState,
+  sessions: Session[],
+  activeThreadId: string | null,
+  locallyRunningThreadId: string | null = null,
+) {
+  const next: SessionAttentionState = {};
+  for (const session of sessions) {
+    const previous = current[session.id];
+    const running = isSessionRunning(session.status) || session.id === locallyRunningThreadId;
+    if (running) next[session.id] = 'running';
+    else if (previous === 'running' && session.id !== activeThreadId) next[session.id] = 'unread';
+    else if (previous === 'unread') next[session.id] = 'unread';
+  }
+  const currentEntries = Object.entries(current);
+  const nextEntries = Object.entries(next);
+  return currentEntries.length === nextEntries.length
+    && nextEntries.every(([id, state]) => current[id] === state) ? current : next;
+}
+
+export function markSessionAttentionRead(current: SessionAttentionState, threadId: string) {
+  if (current[threadId] !== 'unread') return current;
+  const next = { ...current };
+  delete next[threadId];
+  return next;
+}
+
+export function isEventForSelectedThread(
+  eventThreadId: string,
+  selectedThreadId: string | null,
+  ownedThreadId: string | null,
+) {
+  const targetThreadId = eventThreadId || ownedThreadId || '';
+  return !targetThreadId || targetThreadId === selectedThreadId;
+}
+
+export function canStopOwnedTurn(running: boolean, ownedThreadId: string | null, selectedThreadId: string | null) {
+  return running && Boolean(ownedThreadId) && ownedThreadId === selectedThreadId;
+}
+
+export function ownsPendingSubmission(existingSession: boolean, mode: 'desktop' | 'headless' | undefined) {
+  return !existingSession || mode === 'headless';
+}
+
+export function canSteerOwnedTurn(
+  running: boolean,
+  state: ExecutionState,
+  ownedThreadId: string | null,
+  selectedThreadId: string | null,
+) {
+  return state === 'running' && canStopOwnedTurn(running, ownedThreadId, selectedThreadId);
+}
+
+export function canSendToActiveDesktopTurn(
+  running: boolean,
+  state: ExecutionState,
+  ownedThreadId: string | null,
+  selectedThreadId: string | null,
+) {
+  return !running && state === 'running' && !ownedThreadId && Boolean(selectedThreadId);
+}
+
+export function isCurrentSessionRequest(
+  requestedThreadId: string | null,
+  selectedThreadId: string | null,
+  requestVersion: number,
+  selectedVersion: number,
+) {
+  return requestedThreadId === selectedThreadId && requestVersion === selectedVersion;
+}
+
+export function sessionDeliveryMatchesTarget(
+  requestedThreadId: string | null,
+  deliveredThreadId: string | null | undefined,
+) {
+  return !requestedThreadId || !deliveredThreadId || requestedThreadId === deliveredThreadId;
+}
+
+export function shouldAdoptStartedThread(
+  startedThreadId: string,
+  selectedThreadId: string | null,
+  pendingNewSession: boolean,
+) {
+  return Boolean(startedThreadId)
+    && (startedThreadId === selectedThreadId || (!selectedThreadId && pendingNewSession));
+}
+
+export function isNearScrollBottom(
+  metrics: Pick<HTMLElement, 'scrollHeight' | 'scrollTop' | 'clientHeight'>,
+  threshold = 180,
+) {
+  return metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight < threshold;
+}
+
+export function shouldLoadOlderHistory(
+  metrics: Pick<HTMLElement, 'scrollTop'>,
+  nextCursor: string | null,
+  initialHistoryLoaded: boolean,
+  historyLoading: boolean,
+  threshold = 160,
+) {
+  return Boolean(nextCursor) && initialHistoryLoaded && !historyLoading && metrics.scrollTop <= threshold;
+}
+
+export function initialBootstrapReady(
+  authenticated: boolean,
+  sessionsInitialized: boolean,
+  sessionCount: number,
+  selectedThreadId: string | null,
+  initialHistoryLoaded: boolean,
+) {
+  return authenticated
+    && sessionsInitialized
+    && (sessionCount === 0 || (Boolean(selectedThreadId) && initialHistoryLoaded));
+}
+
+export function sessionUpdatedAt(value: Session['updatedAt']) {
+  if (!value) return 0;
+  const numeric = typeof value === 'number' && value < 10_000_000_000 ? value * 1000 : value;
+  const timestamp = new Date(numeric).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+export function projectLabel(path: string) {
+  const normalized = path.replace(/[\\/]+$/, '');
+  const name = normalized.split(/[\\/]/).at(-1) || normalized;
+  return name && name !== path ? `${name} — ${path}` : path;
+}
+
+export function sessionProjectName(path?: string) {
+  const value = String(path || '').trim();
+  if (!value || isTemporaryProjectPath(value)) return '';
+  const normalized = value.replace(/[\\/]+$/, '');
+  return normalized.split(/[\\/]/).at(-1) || normalized;
+}
+
+export function isTemporaryProjectPath(path: string) {
+  const normalized = String(path || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLocaleLowerCase();
+  if (!normalized) return false;
+  return /\/documents\/codex\/\d{4}-\d{2}-\d{2}(?:\/|$)/.test(normalized)
+    || /\/\.codex\/(?:tmp|temp|worktrees|visualizations)(?:\/|$)/.test(normalized)
+    || /\/appdata\/local\/temp(?:\/|$)/.test(normalized)
+    || /\/(?:windows\/)?temp(?:\/|$)/.test(normalized);
+}
+
+export function formatDate(value: Session['updatedAt']) {
+  if (!value) return t('未知时间', 'Unknown time');
+  const numeric = typeof value === 'number' && value < 10_000_000_000 ? value * 1000 : value;
+  const date = new Date(numeric);
+  if (Number.isNaN(date.getTime())) return t('最近更新', 'Recently updated');
+  return new Intl.DateTimeFormat(dateLocale, {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(date);
+}
