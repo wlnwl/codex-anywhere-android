@@ -184,6 +184,7 @@ const NEW_TURN_KEY = '__new_turn__';
 const PairingDialog = lazy(() => import('./pairing-dialog').then((module) => ({
   default: module.PairingDialog,
 })));
+const AccountDialog = lazy(() => import('./account-dialog').then(({ AccountDialog }) => ({ default: AccountDialog })));
 
 function loadSessionAttention(environmentId = DEFAULT_ENVIRONMENT_ID): SessionAttentionState {
   try {
@@ -298,6 +299,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const [creatingNewSession, setCreatingNewSession] = useState(false);
   const [newSessionDialogOpen, setNewSessionDialogOpen] = useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [accountEnvironmentId, setAccountEnvironmentId] = useState<string | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<{ id: string; title: string; environment: string; cancelPendingApproval?: boolean } | null>(null);
   const [lastArchived, setLastArchived] = useState<{ id: string; title: string; environment: string } | null>(null);
   const [restoringSession, setRestoringSession] = useState(false);
@@ -548,6 +550,21 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     payload: Record<string, unknown>,
     options: RequestOptions = {},
   ): Promise<T> => requestManagerRef.current!.request<T>(action, payload, options), []);
+  const openAccounts = useCallback(() => {
+    if (secureChannelRef.current?.isReady()) setAccountEnvironmentId(environmentIdRef.current);
+  }, []);
+  const closeAccounts = useCallback(() => setAccountEnvironmentId(null), []);
+  const requestAccount = useCallback(<T,>(
+    action: string,
+    payload: Record<string, unknown>,
+    options?: RequestOptions,
+  ): Promise<T> => {
+    if (!accountEnvironmentId || accountEnvironmentId !== environmentIdRef.current
+      || !secureChannelRef.current?.isReady()) {
+      return Promise.reject(new Error('secure_channel_not_ready'));
+    }
+    return request<T>(action, payload, options);
+  }, [accountEnvironmentId, request]);
 
   const { fileDownload, downloadLocalFile, cancelFileDownload } = useFileTransfer({
     online, request, reportTimelineError, environmentIdRef, selectedRequestRef, connectorOnlineRef, secureChannelRef,
@@ -1543,6 +1560,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     setSearchOpen(false);
     closeNewSessionDialog();
     setRenameDialogOpen(false);
+    setAccountEnvironmentId(null);
     setNewSessionCwd(() => {
       const stored = loadEnvironmentValue(NEW_SESSION_CWD_KEY, nextEnvironmentId) || '';
       return isTemporaryProjectPath(stored) ? '' : stored;
@@ -2283,6 +2301,8 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         environmentIds={environmentIds}
         environmentLabels={environmentLabels}
         onEnvironmentRename={hasEnvironmentInventory ? renameEnvironment : undefined}
+        onOpenAccounts={openAccounts}
+        accountOnline={online}
         onlineEnvironmentIds={onlineEnvironmentIds}
         sessions={sessions}
         selectedThreadId={threadId}
@@ -2297,6 +2317,13 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         onClose={closeDrawer}
         onSelect={selectSession}
       />
+
+      {accountEnvironmentId === environmentId && (
+        <Suspense fallback={null}>
+          <AccountDialog deviceLabel={environmentDisplayName(environmentId, environmentLabels)}
+            request={requestAccount} onClose={closeAccounts} />
+        </Suspense>
+      )}
 
       {newSessionDialogOpen && (
         <div
