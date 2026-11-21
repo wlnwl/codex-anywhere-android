@@ -94,8 +94,9 @@ function harness({ autoSelect = false } = {}) {
 test('connector restart clears stale keys, recovers the selected route and never replays mutation requests',()=>{
   const h=harness(), ws=h.connect();h.context.selectDevice('pc');
   const old=h.channels[0];old.becomeReady();
-  h.context.request('send-once','turn.start',{text:'example'});
+  h.context.request('send-once','turn.start',{text:'example',delivery:'desktop_tool'});
   assert.equal(old.frames.length,1);
+  assert.equal(old.frames[0].payload.delivery,'desktop_tool');
   ws.server({type:'presence',...h.devices([],['pc'])});
   assert.equal(old.cleared,true);
   assert.ok(h.events.some(e=>e.type==='disconnected'&&e.scope==='device'));
@@ -139,6 +140,62 @@ test('stale channel callbacks cannot render old frames or change current device 
   assert.equal(event.frame.requestId,'new');
 });
 
+test('opted-in task watch renews on the secure channel in the background, without forwarding its bookkeeping',()=>{
+  const h=harness();h.connect();h.context.selectDevice('pc');
+  const channel=h.channels[0];channel.becomeReady();h.advance(15_000);
+  assert.equal(channel.frames.length,0,'no watch before opt-in');
+  h.context.watchTaskNotifications('session-a');
+  const first=channel.frames[0];
+  assert.equal(first.action,'task.notifications.watch');
+  assert.equal(first.payload.threadId,'session-a');
+  h.context.watchTaskNotifications('session-a');
+  const before=h.events.length;
+  channel.incoming({type:'ack',requestId:first.requestId});
+  channel.incoming({type:'response',requestId:first.requestId,ok:true});
+  assert.equal(h.events.length,before);
+  h.context.setForeground(false);
+  h.advance(15_000);
+  assert.equal(channel.frames.length,2);
+  assert.notEqual(channel.frames[1].requestId,first.requestId);
+  const event=threadId=>({type:'event',event:'task.notification',payload:{threadId,kind:'completed',eventId:'turn:one'}});
+  channel.incoming(event('session-b'));
+  assert.equal(h.events.length,before);
+  channel.incoming(event('session-a'));
+  assert.equal(h.events.at(-1).relayOrigin,'https://relay.test');
+  assert.equal(h.events.at(-1).deviceId,'pc');
+  h.context.watchTaskNotifications('');
+  assert.deepEqual([...channel.frames.at(-1).payload.threadIds],[]);
+  channel.incoming(event('session-a'));
+  h.advance(60_000);
+  assert.equal(h.events.length,before+1);
+  assert.equal(channel.frames.length,3);
+});
+
+test('task watch survives a transient channel loss and cannot leak across a device or relay switch',()=>{
+  const h=harness(),ws=h.connect();
+  ws.server({type:'presence',...h.devices(['pc','other'])});h.context.selectDevice('pc');
+  const old=h.channels[0];old.becomeReady();h.context.watchTaskNotifications('session-a');
+  ws.server({type:'presence',...h.devices(['other'],['pc'])});h.advance(60_000);
+  assert.equal(old.frames.length,1);
+  ws.server({type:'presence',...h.devices(['pc','other'])});
+  const recovered=h.channels[1];recovered.becomeReady();
+  assert.equal(recovered.frames[0].payload.threadId,'session-a');
+  h.context.selectDevice('other');
+  assert.deepEqual([...recovered.frames.at(-1).payload.threadIds],[]);
+  const current=h.channels[2];current.becomeReady();h.advance(30_000);
+  assert.equal(current.frames.length,0);
+  h.context.watchTaskNotifications('session-b');
+  const next=h.connect('https://elsewhere.test/');
+  assert.deepEqual([...current.frames.at(-1).payload.threadIds],[]);
+  const before=h.events.length;
+  current.incoming({type:'event',event:'task.notification',payload:{threadId:'session-b'}});
+  assert.equal(h.events.length,before);
+  h.context.selectDevice('pc');
+  h.channels[3].becomeReady();h.advance(30_000);
+  assert.equal(h.channels[3].frames.length,0);
+  assert.equal(next.url,'wss://elsewhere.test/ws');
+});
+
 test('same relay reconnect restores route, a different relay requires selection, old socket errors are ignored',()=>{
   const h=harness(),old=h.connect();h.context.selectDevice('pc');h.channels[0].becomeReady();
   const current=h.connect();assert.equal(h.channels.length,2);
@@ -175,7 +232,7 @@ test('relay session expiry reauthenticates with the saved device key and recover
   ws.server({type:'auth.challenge',challenge:'first'});
   assert.equal(ws.frames[0].type,'auth.enroll');
   ws.server({type:'auth.ok',...h.devices()});h.context.selectDevice('pc');
-  const old=h.channels[0];old.becomeReady();h.context.request('sent','turn.start',{text:'send once'});
+  const old=h.channels[0];old.becomeReady();h.context.request('sent','turn.start',{text:'send once',delivery:'desktop_tool'});
   ws.close(4005);
   assert.equal(old.cleared,true);
   const disconnected=h.events.filter(e=>e.type==='disconnected').at(-1);

@@ -31,6 +31,7 @@
 .account-dialog-session,
 .account-dialog-status,
 .account-dialog-login,
+.account-dialog-quota,
 .account-dialog-confirm {
   display: grid;
   min-width: 0;
@@ -55,6 +56,28 @@
 }
 .account-dialog-session li > span { overflow-wrap: anywhere; }
 .account-dialog-session li > strong { color: var(--appearance-positive, #a9dfc5); font-size: 11px; white-space: nowrap; }
+
+.account-dialog-quota > p,
+.account-quota-window > p { color: var(--appearance-muted, #a0aec3); font-size: 12px; }
+.account-quota-group { display: grid; gap: 10px; }
+.account-quota-group + .account-quota-group {
+  border-top: 1px solid var(--appearance-border, #2b3547);
+  padding-top: 10px;
+}
+.account-quota-group h4 { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.account-quota-window { display: grid; gap: 4px; font-size: 12px; }
+.account-quota-window > div { display: flex; justify-content: space-between; gap: 8px; }
+.account-quota-window strong { font-weight: 650; white-space: nowrap; }
+.account-quota-window meter { width: 100%; height: 10px; }
+.account-quota-window meter::-webkit-meter-bar {
+  border: 0;
+  border-radius: 8px;
+  background: var(--appearance-border, #2b3547);
+}
+.account-quota-window meter::-webkit-meter-optimum-value {
+  border-radius: 8px;
+  background: var(--appearance-accent, #afc5e9);
+}
 
 .account-dialog-action {
   display: inline-flex;

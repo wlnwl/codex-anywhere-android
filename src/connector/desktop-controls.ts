@@ -14,8 +14,11 @@ const approvalMethods = {
   'item/permissions/requestApproval': 'thread-follower-permissions-request-approval-response',
 } as const;
 
-function approvalId(owner: string, request: Value) {
+export function desktopApprovalId(owner: string, request: Value) {
   return 'desktop:' + createHash('sha256').update(JSON.stringify([owner, request.id, request.method, request.params])).digest('hex');
+}
+export function isDesktopApproval(request: Value) {
+  return request?.id != null && Object.hasOwn(approvalMethods, request.method);
 }
 export function desktopSummary(state: Value, owner: string) {
   const status = String(state.threadRuntimeStatus?.type || 'unknown');
@@ -28,12 +31,12 @@ export function desktopSummary(state: Value, owner: string) {
   }
   const turnId = status === 'active' ? active?.turnId || null : null;
   const approvals = (Array.isArray(state.requests) ? state.requests : [])
-    .filter((r: Value) => Object.hasOwn(approvalMethods, r.method) && r.id != null)
+    .filter(isDesktopApproval)
     .map((r: Value) => {
       const summary = JSON.stringify(r.params ?? {}, null, 2);
       const decisions = r.params?.availableDecisions;
       const supported = !Array.isArray(decisions) || decisions.includes('accept');
-      return { approvalId: approvalId(owner, r), threadId: state.id, turnId: r.params?.turnId || turnId,
+      return { approvalId: desktopApprovalId(owner, r), threadId: state.id, turnId: r.params?.turnId || turnId,
         kind: r.method, source: 'desktop', actionable: supported && summary.length <= 24_000,
         summary: summary.slice(0, 24_000) };
     });
@@ -46,7 +49,7 @@ export function desktopSummary(state: Value, owner: string) {
     serviceTier: state.latestThreadSettings?.serviceTier ?? state.latestServiceTier ?? 'default' };
 }
 
-function* conversationTurns(state: Value): Generator<Value> {
+export function* conversationTurns(state: Value): Generator<Value> {
   yield* state.turns || [];
   const entities = state.turnHistory?.history?.entitiesByKey || {};
   for (const key in entities) if (Object.hasOwn(entities, key)) yield entities[key];
@@ -197,7 +200,7 @@ export class DesktopControls {
 
   async respond(threadId: string, id: string, approved: boolean) {
     const before = await this.snapshot(threadId, true, false);
-    const request = (before.state.requests || []).find((r: Value) => approvalId(before.owner, r) === id);
+    const request = (before.state.requests || []).find((r: Value) => desktopApprovalId(before.owner, r) === id);
     if (!request || !Object.hasOwn(approvalMethods, request.method)) throw new Error('desktop_approval_expired');
     if (!before.summary.approvals.find((r: Value) => r.approvalId === id)?.actionable) throw new Error('desktop_approval_unsupported');
     const method = approvalMethods[request.method as keyof typeof approvalMethods];
@@ -215,7 +218,7 @@ export class DesktopControls {
       if (reply.result?.ok !== true) throw new Error('desktop_approval_unconfirmed');
     } catch (error) { if ((error as Error).message === 'desktop_approval_unconfirmed') throw error; throw mutationError(error); }
     await this.input.state.waitFor(threadId, before.owner, state =>
-      !(state.requests || []).some((r: Value) => approvalId(before.owner, r) === id)
+      !(state.requests || []).some((r: Value) => desktopApprovalId(before.owner, r) === id)
     ).catch(() => { throw new Error('desktop_approval_unconfirmed'); });
     return { approvalId: id, approved, resolved: true };
   }

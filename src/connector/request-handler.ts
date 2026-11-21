@@ -18,6 +18,7 @@ type BridgeRequest = {
   requestId?: string;
   clientId?: string;
   clientDeviceId?: string;
+  clientChannelId?: string;
 };
 type CodexGateway = {
   child: unknown;
@@ -39,6 +40,7 @@ type CodexGateway = {
   readPermissionMode(threadId: string, options?: { fresh?: boolean }): Promise<any>;
   updatePermissionMode(threadId: string, mode: unknown): Promise<any>;
   startTurn(options: Payload): Promise<Record<string, any>>;
+  startLegacyTurn?(options: Payload, checkDesktop: () => Promise<void>): Promise<Record<string, any>>;
   steerTurn(options: Payload): Promise<Record<string, any>>;
   stopTurn(threadId?: unknown): Promise<any>;
   listApprovals(threadId: unknown, clientId?: string): any;
@@ -47,15 +49,19 @@ type CodexGateway = {
   prepareDesktopTurn?(): Promise<void>;
   isLargeSession(threadId: string): Promise<boolean>;
   canOwnSession(threadId: string): boolean;
+  ownsManagedSession?(threadId: string): boolean;
   needsDesktopPermissionRecovery(threadId: string): Promise<boolean>;
 };
 type DesktopGateway = {
   controls?: Pick<DesktopControls, 'read' | 'modelConfig' | 'updateModel' | 'stop' | 'respond'>
     & Partial<Pick<DesktopControls, 'permissions' | 'updatePermissions' | 'editMessage'>>;
-  getCapabilities?(): Promise<{ available: boolean; tools: string[]; inputAvailable?: boolean }>;
+  getCapabilities?(): Promise<{ available: boolean; tools: string[]; inputAvailable?: boolean; inputMissing?: boolean }>;
+  nativeInputMissing?(): Promise<boolean>;
+  assertLegacySessionIdle?(threadId: string): Promise<void>;
   listThreads(options: Payload): Promise<DesktopThreadStatus[]>;
   readThreadState(options: Payload): Promise<any>;
   sendMessage(options: Payload): Promise<any>;
+  sendTextViaAppTool?(options: Payload): Promise<any>;
   renameThread(options: Payload): Promise<any>;
   openThread?(options: Payload): Promise<any>;
   archiveThread?(options: Payload): Promise<any>;
@@ -64,6 +70,7 @@ type DesktopGateway = {
 type Dependencies = {
   accounts?: Pick<AccountControls, 'dispatch'>;
   onSessionStatuses?(snapshot: SessionStatusSnapshot): void;
+  watchDesktopNotifications?(target: { clientId: string; channelId: string }, payload: Payload): unknown;
   browser?: BrowserSessionBroker;
   codex: CodexGateway;
   desktop?: DesktopGateway | null;
@@ -88,6 +95,7 @@ type DispatchContext = Dependencies & Required<Pick<BridgeRequest, 'action'>> & 
   requestId?: string;
   clientId?: string;
   clientDeviceId?: string;
+  clientChannelId?: string;
   getDesktopStatuses(): SessionStatusSnapshot | null;
   refreshDesktopThreads(callerThreadId: unknown): void;
 };
@@ -110,7 +118,7 @@ async function headerModelCatalog(codex: CodexGateway) {
 export function createRequestHandler({
   codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, browser, accounts,
   deviceLabel = deviceId, mode = desktop ? 'desktop' : 'headless',
-  networkAccess = false, allowFullAccess = false, onSessionStatuses,
+  networkAccess = false, allowFullAccess = false, onSessionStatuses, watchDesktopNotifications,
 }: Dependencies) {
   let desktopStatusCache: (SessionStatusSnapshot & { updatedAt: number }) | null = null;
   let desktopStatusRefresh: Promise<void> | null = null;
@@ -138,13 +146,13 @@ export function createRequestHandler({
   };
   return async function handleRequest(message: BridgeRequest) {
     const {
-      action, payload = {}, requestId, clientId, clientDeviceId,
+      action, payload = {}, requestId, clientId, clientDeviceId, clientChannelId,
     } = message;
     try {
       const run = () => dispatchAction({
-        action, payload, requestId, clientId, clientDeviceId,
+        action, payload, requestId, clientId, clientDeviceId, clientChannelId,
         codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, accounts,
-        networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads,
+        networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads, watchDesktopNotifications,
       });
       const data = await (MEASURED_ACTIONS.has(action) ? measureOperation(action, run) : run());
       return { type: 'response', clientId, requestId, ok: true, data };
@@ -155,10 +163,17 @@ export function createRequestHandler({
 }
 
 async function dispatchAction({
-  action, payload, requestId, clientId, clientDeviceId,
+  action, payload, requestId, clientId, clientDeviceId, clientChannelId,
   codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, accounts,
-  networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads,
+  networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads, watchDesktopNotifications,
 }: DispatchContext) {
+  const managedSession = mode === 'desktop'
+    && codex.ownsManagedSession?.(String(payload.threadId || '').trim()) === true;
+  if (action === 'task.notifications.watch') {
+    if (!clientId || !clientChannelId) throw new Error('notification_authenticated_channel_required');
+    return watchDesktopNotifications?.({ clientId, channelId: clientChannelId }, payload)
+      ?? { watchedThreadIds: [], leaseMs: 0 };
+  }
   if (action.startsWith('account.')) {
     if (!accounts) throw new Error('account_control_unavailable');
     if (!clientDeviceId) throw new Error('account_authenticated_device_required');
@@ -197,6 +212,8 @@ async function dispatchAction({
       activeTurn: codex.activeTurns.size > 0,
       capabilities: { sessionDelete: mode === 'headless', networkAccess, fullAccess: allowFullAccess,
         ...(mode === 'desktop' && desktop?.controls && desktopState?.inputAvailable ? { desktopNativeState: true, desktopNativeImages: Boolean(attachments.nativeInput) } : {}),
+        ...(mode === 'desktop' && codex.startLegacyTurn && desktop?.nativeInputMissing && desktop.assertLegacySessionIdle
+          && desktopState?.inputMissing === true && supports('read_thread') ? { legacySessionAppServer: true } : {}),
         ...(mode === 'desktop' && desktop?.archiveThread && supports('read_thread', 'set_thread_archived') ? { sessionArchive: true, sessionArchivePendingApproval: true } : {}),
         ...(mode === 'desktop' && desktop?.restoreThread && supports('set_thread_archived') ? { sessionRestore: true } : {}),
         ...(fileUploads ? { fileUpload: true } : {}), ...(browser ? { browserControl: true, browserGrantReplacement: true } : {}) },
@@ -208,14 +225,18 @@ async function dispatchAction({
     refreshDesktopThreads(sessions[0]?.id);
     return {
       sessions: mergeDesktopSessionStatuses(
-        sessions,
+        sessions.map(session => mode === 'desktop' && codex.ownsManagedSession?.(session?.id) === true
+          ? { ...session, executionRoute: 'appServer' } : session),
         desktopStatuses?.threads || [],
         [...codex.activeTurns.values()].map(turn => turn.threadId),
       ),
       desktopStatuses,
     };
   }
-  if (action === 'session.read') return codex.readSession(String(payload.threadId || ''));
+  if (action === 'session.read') {
+    const session = await codex.readSession(String(payload.threadId || ''));
+    return managedSession ? { ...session, executionRoute: 'appServer' } : session;
+  }
   if (action === 'session.archive') {
     if (mode !== 'desktop' || !desktop?.archiveThread) throw new Error('session_archive_unsupported');
     if (payload.confirm !== true) throw new Error('session_archive_confirmation_required');
@@ -267,7 +288,7 @@ async function dispatchAction({
     return codex.readTurnDiff(String(payload.threadId || ''), String(payload.turnId || ''));
   }
   if (action === 'session.model-config.read') {
-    if (mode === 'desktop') {
+    if (mode === 'desktop' && !managedSession) {
       if (!desktop?.controls || !codex.listModels) throw new Error('desktop_input_unsupported');
       const threadId = String(payload.threadId || '');
       const catalog = headerModelCatalog(codex);
@@ -280,14 +301,14 @@ async function dispatchAction({
     return codex.readModelConfig(String(payload.threadId || ''));
   }
   if (action === 'session.model-config.update') {
-    if (mode === 'desktop') {
+    if (mode === 'desktop' && !managedSession) {
       if (!desktop?.controls || !codex.listModels) throw new Error('desktop_input_unsupported');
       return desktop.controls.updateModel(String(payload.threadId || ''), payload, await codex.listModels());
     }
     return codex.updateModelConfig(String(payload.threadId || ''), payload);
   }
   if (action === 'session.permissions.read') {
-    if (mode === 'desktop' && desktop?.controls?.permissions) {
+    if (mode === 'desktop' && !managedSession && desktop?.controls?.permissions) {
       const threadId = String(payload.threadId || '');
       try {
         return await desktop.controls.permissions(threadId, { networkAccess: Boolean(networkAccess), allowFullAccess: Boolean(allowFullAccess) });
@@ -296,10 +317,10 @@ async function dispatchAction({
         return { ...await codex.readStoredPermissionConfig(threadId), allowFullAccess: Boolean(allowFullAccess) };
       }
     }
-    const desktopState = mode === 'desktop' ? await desktop?.getCapabilities?.() : undefined;
+    const desktopState = mode === 'desktop' && !managedSession ? await desktop?.getCapabilities?.() : undefined;
     return {
-      ...await codex.readPermissionMode(String(payload.threadId || ''), { fresh: mode === 'desktop' }),
-      editable: mode === 'headless',
+      ...await codex.readPermissionMode(String(payload.threadId || ''), { fresh: mode === 'desktop' && !managedSession }),
+      editable: mode === 'headless' || managedSession,
       networkAccess,
       allowFullAccess,
       ...(mode === 'desktop' && desktop?.openThread && desktopState?.available && desktopState.tools.includes('navigate_to_codex_page') ? { canOpenOnDesktop: true } : {}),
@@ -310,7 +331,7 @@ async function dispatchAction({
     return desktop.openThread({ threadId: payload.threadId });
   }
   if (action === 'session.permissions.update') {
-    if (mode === 'desktop' && desktop?.controls?.updatePermissions) {
+    if (mode === 'desktop' && !managedSession && desktop?.controls?.updatePermissions) {
       const threadId = String(payload.threadId || '').trim();
       try {
         return await desktop.controls.updatePermissions(threadId, payload,
@@ -321,7 +342,7 @@ async function dispatchAction({
         return { ...await codex.updateStoredPermissionConfig(threadId, payload), allowFullAccess: Boolean(allowFullAccess) };
       }
     }
-    if (mode !== 'headless') throw new Error('desktop_permission_mode_managed_on_computer');
+    if (mode !== 'headless' && !managedSession) throw new Error('desktop_permission_mode_managed_on_computer');
     return {
       ...await codex.updatePermissionMode(String(payload.threadId || ''), payload.mode),
       editable: true,
@@ -357,7 +378,7 @@ async function dispatchAction({
     }
     if (payload.confirm !== true || typeof payload.token !== 'string') throw new Error('message_edit_invalid');
     const text = editText(payload.text);
-    if (mode === 'headless') return { ...await codex.startTurn({
+    if (mode === 'headless' || managedSession) return { ...await codex.startTurn({
       threadId, text, clientId, requestId, edit: { turnId, token: payload.token, confirm: true },
     }), delivery: 'appServer' };
     if (!desktop?.controls?.editMessage) throw new Error('message_edit_unavailable');
@@ -400,7 +421,7 @@ async function dispatchAction({
     if (pending.approvals?.length || pending.activeTurn) return pending;
     const threadId = String(payload.threadId || '').trim();
     if (!threadId) return pending;
-    if (mode !== 'desktop' || !desktop) return pending;
+    if (mode !== 'desktop' || !desktop || managedSession) return pending;
     try {
       if (desktop.controls) {
         const state = await desktop.controls.read(threadId);
@@ -446,20 +467,46 @@ async function startTurn({
   codex, desktop, mode, payload, clientId, requestId, browser, attachments,
 }: Pick<DispatchContext, 'codex' | 'desktop' | 'mode' | 'payload' | 'clientId' | 'requestId' | 'browser' | 'attachments'>) {
   const threadId = String(payload.threadId || '').trim();
-  if (!threadId || mode === 'headless') {
+  const managedSession = Boolean(threadId && codex.ownsManagedSession?.(threadId));
+  if (payload.delivery === 'desktop_tool') {
+    if (mode !== 'desktop' || !threadId || managedSession || !desktop?.sendTextViaAppTool) {
+      throw new Error('desktop_text_delivery_unavailable');
+    }
+    if (payload.image || payload.attachment) throw new Error('desktop_text_delivery_text_only');
+    if (typeof payload.text !== 'string' || !payload.text.trim()) throw new Error('message_required');
+    const deliver = desktop.sendTextViaAppTool.bind(desktop);
+    await codex.prepareDesktopTurn?.();
+    return sendWithBrowserContext(browser, threadId, payload.text,
+      (text) => deliver({ threadId, text }));
+  }
+  if (!threadId || mode === 'headless' || managedSession) {
+    if (managedSession && payload.image) throw new Error('desktop_image_unsupported');
     // A reloaded/reconnected browser may have missed turn.started. Resolve
     // delivery from the connector's ownership, never from browser hints.
     const active = threadId ? codex.getActiveTurn(threadId) : null;
     const steer = threadId && active?.threadId === threadId
       && active.state === 'running' && active.turnId;
-    return { ...await sendWithBrowserContext(browser, threadId, payload.text,
+    const result = await sendWithBrowserContext(browser, threadId, payload.text,
       (text) => steer
         ? codex.steerTurn({ ...payload, text, clientId, requestId })
-        : codex.startTurn({ ...payload, text, clientId, requestId })), delivery: 'appServer' };
+        : codex.startTurn({ ...payload, text, clientId, requestId }));
+    return { ...result, delivery: 'appServer',
+      ...(mode === 'desktop' && typeof result.threadId === 'string' && codex.ownsManagedSession?.(result.threadId)
+        ? { executionRoute: 'appServer' } : {}) };
   }
-  // Existing Desktop tasks must keep their original writer. Starting or
-  // resuming them through the bridge's app-server creates a second writer and
-  // makes later Desktop delivery fail with "already has an active writer".
+  // Old sessions can move only when the native transport is confirmed missing
+  // before any send. The app-server verifies the existing target and writer.
+  const startLegacy = codex.startLegacyTurn?.bind(codex);
+  const checkLegacyIdle = desktop?.assertLegacySessionIdle?.bind(desktop);
+  if (startLegacy && checkLegacyIdle && await desktop?.nativeInputMissing?.()) {
+    if (payload.image) throw new Error('desktop_image_unsupported');
+    const result = await sendWithBrowserContext(browser, threadId, payload.text, text => startLegacy(
+      { threadId, text, clientId, requestId }, () => checkLegacyIdle(threadId),
+    ));
+    return { ...result, delivery: 'appServer', executionRoute: 'appServer' };
+  }
+  // When native input is available, let Desktop remain the writer. A native
+  // send failure is never retried on another route, even when it times out.
   if (!desktop) throw new Error('desktop_app_unavailable');
   const imagePath = payload.image && attachments.nativeInput ? await attachments.nativeInput(payload.image) : undefined;
   if (payload.image && !imagePath) throw new Error('desktop_image_unsupported');

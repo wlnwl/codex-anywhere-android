@@ -7,22 +7,26 @@ import { BrowserSecureChannel } from '../../web/src/secure-channel-client';
 
 declare const Native: { emit: (s: string) => void; identity: () => string; saveIdentity: (s: string) => void };
 type Frame = Record<string, any>;
-const emit = (type: string, data: Frame = {}) => Native.emit(JSON.stringify({ type, ...data }));
+const emit = (type: string, data: Frame = {}) => Native.emit(JSON.stringify({ type, relayOrigin, ...data }));
 const MAX_CHANNEL_ATTEMPTS = 3;
 const CHANNEL_TIMEOUT_MS = 8_000;
 const MAX_RELAY_ATTEMPTS = 5;
+const TASK_WATCH_INTERVAL_MS = 15_000;
+const TASK_WATCH_REQUEST_PREFIX = 'native-task-watch-';
 const TRANSIENT_RELAY_CLOSE_CODES = new Set([1000, 1001, 1006, 1011, 1012, 1013, 1014, 4005]);
 let socket: WebSocket | null = null;
 let channel: BrowserSecureChannel | null = null;
 let identity: ReturnType<typeof createDeviceIdentity>;
 let route = '', relayOrigin = '', epoch = 0, channelEpoch = 0;
 let authenticated = false, channelAttempts = 0;
-let devices: any[] = [], onlineDevices = new Set<string>();
+let devices: any[] = [], onlineDevices = new Set<string>(), inventoryComplete = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let handshakeTimer: ReturnType<typeof setTimeout> | null = null;
 let foreground = false, relayRecoveryAllowed = false, relayRetryPending = false, relayAttempts = 0;
 let relayTarget: URL | null = null;
 let relayRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let taskWatchThread = '', taskWatchSequence = 0;
+let taskWatchTimer: ReturnType<typeof setTimeout> | null = null;
 try {
   const saved = JSON.parse(Native.identity());
   identity = createDeviceIdentity(saved.privateKey);
@@ -40,6 +44,7 @@ function clearTimers() {
 function clearChannel() {
   ++channelEpoch;
   clearTimers();
+  stopTaskWatchTimer();
   channel?.clear();
   channel = null;
 }
@@ -57,6 +62,34 @@ function canConnectDevice() {
   return isRelayReady() && Boolean(route) && onlineDevices.has(route);
 }
 
+function stopTaskWatchTimer() {
+  if (taskWatchTimer !== null) clearTimeout(taskWatchTimer);
+  taskWatchTimer = null;
+}
+
+function sendTaskWatch(threadId: string) {
+  return !!(canConnectDevice() && channel?.isReady() && channel.sendFrame({
+    type: 'request', requestId: TASK_WATCH_REQUEST_PREFIX + (++taskWatchSequence),
+    action: 'task.notifications.watch', payload: threadId ? { threadId } : { threadIds: [] },
+  }));
+}
+
+function renewTaskWatch() {
+  stopTaskWatchTimer();
+  if (!taskWatchThread || !canConnectDevice() || !channel?.isReady()) return;
+  const generation = channelEpoch;
+  sendTaskWatch(taskWatchThread);
+  taskWatchTimer = setTimeout(() => {
+    if (generation === channelEpoch) renewTaskWatch();
+  }, TASK_WATCH_INTERVAL_MS);
+}
+
+function clearTaskWatch() {
+  if (taskWatchThread) sendTaskWatch('');
+  taskWatchThread = '';
+  stopTaskWatchTimer();
+}
+
 function emitInventory() {
   emit('devices', {
     devices,
@@ -64,6 +97,7 @@ function emitInventory() {
     selectedOnline: Boolean(route) && onlineDevices.has(route),
     channelReady: channel?.isReady() === true,
     relayAuthenticated: isRelayReady(),
+    inventoryComplete,
   });
 }
 
@@ -96,7 +130,12 @@ function startChannel() {
     identity, routeDeviceId: selected,
     send: frame => current() && send(frame),
     onFrame: frame => {
-      if (current()) emit('frame', { frame, deviceId: selected });
+      if (!current()) return;
+      if ((frame.type === 'response' || frame.type === 'ack')
+        && String(frame.requestId || '').startsWith(TASK_WATCH_REQUEST_PREFIX)) return;
+      if (frame.type === 'event' && frame.event === 'task.notification'
+        && (!taskWatchThread || frame.payload?.threadId !== taskWatchThread)) return;
+      emit('frame', { frame, deviceId: selected });
     },
     onReady: () => {
       if (!current()) return;
@@ -104,6 +143,7 @@ function startChannel() {
       handshakeTimer = null;
       channelAttempts = 0;
       emit('ready', { deviceId: selected });
+      if (current()) renewTaskWatch();
     },
     onError: () => {
       if (current()) channelFailed(next, '电脑的安全连接已失效，正在重新验证');
@@ -130,7 +170,8 @@ function startChannel() {
 
 function updatePresence(message: Frame) {
   const previousOnline = Boolean(route) && onlineDevices.has(route);
-  devices = Array.isArray(message.environments) ? message.environments : (Array.isArray(message.devices) ? message.devices : []);
+  inventoryComplete = Array.isArray(message.environments);
+  devices = inventoryComplete ? message.environments : (Array.isArray(message.devices) ? message.devices : []);
   // The relay's devices array contains ONLINE routes; environments also includes offline entries.
   onlineDevices = new Set(Array.isArray(message.devices)
     ? message.devices.filter((id: unknown): id is string => typeof id === 'string')
@@ -173,6 +214,7 @@ function scheduleRelayRetry() {
 }
 
 function openRelay(target: URL, pairing: ReturnType<typeof parseBrowserPairingCredential> | null, retrying: boolean) {
+  if (target.origin !== relayOrigin) clearTaskWatch();
   const connection = ++epoch;
   clearChannel();
   const previous = socket;
@@ -182,6 +224,7 @@ function openRelay(target: URL, pairing: ReturnType<typeof parseBrowserPairingCr
   channelAttempts = 0;
   onlineDevices.clear();
   devices = [];
+  inventoryComplete = false;
   if (target.origin !== relayOrigin) route = '';
   relayOrigin = target.origin;
   const currentSocket = new WebSocket('wss://' + target.host + '/ws');
@@ -227,6 +270,7 @@ function openRelay(target: URL, pairing: ReturnType<typeof parseBrowserPairingCr
     authenticated = false;
     onlineDevices.clear();
     devices = [];
+    inventoryComplete = false;
     relayRetryPending = relayRecoveryAllowed && relayAttempts < MAX_RELAY_ATTEMPTS && TRANSIENT_RELAY_CLOSE_CODES.has(event.code);
     if (!relayRetryPending) relayRecoveryAllowed = false;
     emit('disconnected', {
@@ -269,6 +313,7 @@ function openRelay(target: URL, pairing: ReturnType<typeof parseBrowserPairingCr
 (globalThis as any).selectDevice = (id: string) => {
   const selected = String(id || '').trim();
   if (!selected) return;
+  if (selected !== route) clearTaskWatch();
   route = selected;
   clearChannel();
   channelAttempts = 0;
@@ -281,6 +326,19 @@ function openRelay(target: URL, pairing: ReturnType<typeof parseBrowserPairingCr
   else emit('disconnected', { scope: 'device', selectedDeviceId: route, message: '电脑尚未在线，请检查连接器' });
 };
 
+(globalThis as any).watchTaskNotifications = (threadId: string, refresh = false) => {
+  const next = typeof threadId === 'string' && threadId.length <= 128 ? threadId.trim() : '';
+  if (next === taskWatchThread) {
+    if (next && refresh === true) renewTaskWatch();
+    return;
+  }
+  if (!next) clearTaskWatch();
+  else if (route) {
+    taskWatchThread = next;
+    renewTaskWatch();
+  }
+};
+
 (globalThis as any).request = (requestId: string, action: string, payload: any) => {
   // Requests are sent once only. Recovery must never replay commands with an uncertain result.
   if (!canConnectDevice() || !channel?.sendFrame({ type: 'request', requestId, action, payload })) {
@@ -289,6 +347,7 @@ function openRelay(target: URL, pairing: ReturnType<typeof parseBrowserPairingCr
 };
 
 (globalThis as any).cancelConnection = () => {
+  clearTaskWatch();
   ++epoch;
   clearChannel();
   clearRelayRetryTimer();
@@ -298,6 +357,7 @@ function openRelay(target: URL, pairing: ReturnType<typeof parseBrowserPairingCr
   authenticated = false;
   onlineDevices.clear();
   devices = [];
+  inventoryComplete = false;
   const previous = socket;
   socket = null;
   previous?.close(1000, 'connection cancelled');

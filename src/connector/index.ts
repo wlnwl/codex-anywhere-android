@@ -5,6 +5,7 @@ import { CodexAppServer } from './codex-app-server.js';
 import { CodexDesktopClient } from './codex-desktop.js';
 import { readImageAttachment, saveImageAttachment, resolveNativeImageAttachment } from './attachments.js';
 import { desktopSummary } from './desktop-controls.js';
+import { DesktopNotifications, type DesktopTaskNotification } from './desktop-notifications.js';
 import { FileUploadManager, UPLOAD_DIRECTORY } from './file-uploads.js';
 import { loadConnectorConfig } from './config.js';
 import { DownloadManager } from './file-downloads.js';
@@ -20,6 +21,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ConnectorSecureChannels } from './secure-channels.js';
 import { connectorSessionModelSettingsPath } from './session-model-settings.js';
+import { ManagedSessions, connectorManagedSessionsPath } from './managed-sessions.js';
 import { createConnectorAuthProof } from '../shared/auth.js';
 import { createDeviceAuthProof } from '../shared/device-auth.js';
 import {
@@ -55,6 +57,7 @@ const codex = new CodexAppServer({
   networkAccess,
   allowFullAccess,
   modelSettingsPath: connectorSessionModelSettingsPath(deviceId),
+  ...(mode === 'desktop' ? { managedSessions: new ManagedSessions(connectorManagedSessionsPath(deviceId)) } : {}),
 });
 const desktop = mode === 'desktop' ? new CodexDesktopClient() : null;
 // Desktop turn runtimes are released between turns. Device-code login needs an
@@ -88,9 +91,22 @@ const browser = process.env.BRIDGE_BROWSER_ENDPOINT_FILE
   ? new BrowserSessionBroker(deviceId, (frame) => secureChannels.sendEvent(frame)) : undefined;
 const browserEndpoint = browser
   ? await startBrowserEndpoint(browser, process.env.BRIDGE_BROWSER_ENDPOINT_FILE!) : undefined;
+const desktopNotifications = desktop ? new DesktopNotifications({
+  allowed: threadId => codex.canOwnSession(threadId),
+  current: ({ clientId, channelId }): boolean => secureChannels.hasChannel(clientId, channelId),
+  async follow(threadId) {
+    const { id: owner } = await desktop.userInput.owner(threadId, false, 2_000);
+    const state = await desktop.userInput.state.read(threadId, owner, 5_000);
+    return { owner, state };
+  },
+  send: ({ clientId, channelId }, payload: DesktopTaskNotification): void => {
+    secureChannels.sendEvent({ type: 'event', event: 'task.notification', clientId, payload }, channelId);
+  },
+}) : null;
 const handleRequest = createRequestHandler({
   accounts,
   onSessionStatuses: snapshot => secureChannels.broadcastEvent({ type: 'event', event: 'sessions.status', payload: snapshot }),
+  watchDesktopNotifications: desktopNotifications?.watch.bind(desktopNotifications),
   browser,
   codex,
   desktop,
@@ -127,6 +143,9 @@ codex.on('turn-event', (message) => {
 const desktopUpdates = new Map<string, NodeJS.Timeout>();
 const desktopSummaries = new Map<string, ReturnType<typeof desktopSummary>>();
 const desktopPending = new Map<string, { state: Record<string, any>; owner: string }>();
+desktop?.userInput.state.on('notification-state', (threadId: string, state: Record<string, any>, owner: string) => {
+  desktopNotifications?.observe(threadId, state, owner);
+});
 desktop?.userInput.state.on('changed', (threadId: string, state: Record<string, any>, owner: string) => {
   desktopPending.set(threadId, { state, owner });
   if (desktopUpdates.has(threadId)) return;
@@ -143,6 +162,7 @@ desktop?.userInput.state.on('changed', (threadId: string, state: Record<string, 
   timer.unref(); desktopUpdates.set(threadId, timer);
 });
 desktop?.userInput.state.on('invalidated', (threadId: string) => {
+  desktopNotifications?.invalidate(threadId);
   clearTimeout(desktopUpdates.get(threadId)); desktopUpdates.delete(threadId);
   desktopSummaries.delete(threadId);
   desktopPending.delete(threadId);
@@ -202,6 +222,7 @@ function connect() {
 function scheduleReconnect() {
   if (stopped || reconnectTimer) return;
   browser?.clear();
+  desktopNotifications?.clear();
   secureChannels.clear();
   const delay = Math.min(30_000, 1_000 * (2 ** reconnectAttempt)) + Math.floor(Math.random() * 500);
   reconnectAttempt += 1;
@@ -215,6 +236,7 @@ async function shutdown() {
   stopped = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
   await browserEndpoint?.close();
+  desktopNotifications?.clear();
   secureChannels.clear();
   socket?.close(1000, 'connector shutdown');
   desktop?.close();

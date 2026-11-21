@@ -2,7 +2,7 @@ import { DesktopControls } from './desktop-controls.js';
 import { DesktopUserInput } from './desktop-user-input.js';
 import { readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { NativePipeClient, encodeNativeFrame } from './desktop-native-pipe.js';
+import { NativePipeClient, NativeRequestError, encodeNativeFrame } from './desktop-native-pipe.js';
 import { normalizeSessionName } from '../shared/session-name.js';
 
 // Desktop split app tools from browser control in newer builds. Prefer the
@@ -50,6 +50,34 @@ export class CodexDesktopClient {
       model: String(model || '').trim() || undefined,
       thinking: String(thinking || '').trim() || undefined,
     });
+    return { threadId: targetThreadId, delivery: 'desktop' };
+  }
+
+  async sendTextViaAppTool({ threadId, text }: Pick<DesktopMessage, 'threadId' | 'text'>) {
+    const targetThreadId = requireThreadId(threadId);
+    const prompt = typeof text === 'string' ? text.trim() : '';
+    if (!prompt) throw new Error('message_required');
+    const nativeAvailable = await this.userInput.pipe.connect(STATUS_ENRICHMENT_TIMEOUT_MS)
+      .then(() => true, error => {
+        if (error instanceof NativeRequestError && !error.dispatched && error.code === 'desktop_input_pipe_missing') return false;
+        throw new Error('desktop_text_delivery_unavailable');
+      });
+    if (nativeAvailable) throw new Error('desktop_input_available');
+
+    let result: JsonObject;
+    try {
+      result = await this.callTool({
+        tool: 'send_message_to_thread',
+        arguments: { threadId: targetThreadId, prompt },
+        callerThreadId: targetThreadId,
+        callId: `bridge-text-${randomUUID()}`,
+      });
+    } catch (error) {
+      if (error instanceof NativeRequestError && error.dispatched) throw new Error('desktop_delivery_unknown');
+      throw error;
+    }
+    // A failed or malformed tool result does not prove that Desktop did not enqueue the prompt.
+    if (result?.success !== true) throw new Error('desktop_delivery_unknown');
     return { threadId: targetThreadId, delivery: 'desktop' };
   }
 
@@ -151,6 +179,16 @@ export class CodexDesktopClient {
 
   async readThreadState({ threadId }: { threadId?: unknown }) {
     const targetThreadId = requireThreadId(threadId);
+    const thread = await this.readThreadSnapshot(targetThreadId);
+    const status = thread?.status;
+    const activeFlags = Array.isArray(status?.activeFlags) ? status.activeFlags.map(String) : [];
+    return {
+      status: String(status?.type || status || 'unknown'),
+      waitingOnApproval: activeFlags.includes('waitingOnApproval'),
+    };
+  }
+
+  private async readThreadSnapshot(targetThreadId: string, timeoutMs = this.timeoutMs) {
     const result = await this.callTool({
       tool: 'read_thread',
       arguments: {
@@ -161,15 +199,30 @@ export class CodexDesktopClient {
       },
       callerThreadId: targetThreadId,
       callId: `bridge-read-state-${randomUUID()}`,
-    });
+    }, { timeoutMs });
     if (result?.success !== true) throw new Error('desktop_thread_read_failed');
-    const payload = parseToolPayload(result);
-    const status = payload?.thread?.status;
-    const activeFlags = Array.isArray(status?.activeFlags) ? status.activeFlags.map(String) : [];
-    return {
-      status: String(status?.type || status || 'unknown'),
-      waitingOnApproval: activeFlags.includes('waitingOnApproval'),
-    };
+    return parseToolPayload(result)?.thread;
+  }
+
+  async nativeInputMissing() {
+    return this.userInput.pipe.connect(STATUS_ENRICHMENT_TIMEOUT_MS)
+      .then(() => false, isMissingNativeInput);
+  }
+
+  async assertLegacySessionIdle(threadId: string) {
+    const thread = await this.readThreadSnapshot(requireThreadId(threadId), 5_000)
+      .catch(() => { throw new Error('legacy_session_state_unavailable'); });
+    if (thread?.id !== threadId || thread.kind !== 'codex') throw new Error('legacy_session_state_unavailable');
+    const status = thread.status?.type || thread.status;
+    if (status === 'active' || status === 'running'
+        || (Array.isArray(thread.status?.activeFlags) && thread.status.activeFlags.length)) {
+      throw new Error('legacy_session_busy');
+    }
+    if (status !== 'idle' && status !== 'notLoaded') throw new Error('legacy_session_state_unavailable');
+    const input = await this.userInput.pipe.connect(STATUS_ENRICHMENT_TIMEOUT_MS)
+      .then(() => 'available', error => isMissingNativeInput(error) ? 'missing' : 'unknown');
+    if (input === 'available') throw new Error('legacy_session_native_available');
+    if (input === 'unknown') throw new Error('legacy_session_state_unavailable');
   }
 
   async callTool(
@@ -243,6 +296,7 @@ export class CodexDesktopClient {
       available: appTools.status === 'fulfilled',
       tools: appTools.status === 'fulfilled' ? [...appTools.value.tools] : [],
       inputAvailable: input.status === 'fulfilled',
+      ...(input.status === 'rejected' && isMissingNativeInput(input.reason) ? { inputMissing: true } : {}),
     };
   }
 
@@ -253,6 +307,10 @@ export class CodexDesktopClient {
     this.client?.close();
     this.client = null;
   }
+}
+
+function isMissingNativeInput(error: unknown) {
+  return error instanceof NativeRequestError && !error.dispatched && error.code === 'desktop_input_pipe_missing';
 }
 
 async function discoverDesktopClient<T extends { close(): void }>(

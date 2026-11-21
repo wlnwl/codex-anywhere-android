@@ -55,6 +55,27 @@ function sessionSnapshot(value: any) {
   };
 }
 
+function usageWindow(value: any) {
+  if (!Number.isFinite(value?.usedPercent) || value.usedPercent < 0) return null;
+  return {
+    usedPercent: Math.min(100, value.usedPercent),
+    windowDurationMins: Number.isSafeInteger(value.windowDurationMins) && value.windowDurationMins > 0
+      ? value.windowDurationMins : null,
+    resetsAt: Number.isSafeInteger(value.resetsAt) && value.resetsAt > 0 && value.resetsAt <= 8_640_000_000_000
+      ? value.resetsAt : null,
+  };
+}
+
+function usageLimit(value: any) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    limitId: optionalText(value.limitId, 64),
+    limitName: optionalText(value.limitName, 100),
+    primary: usageWindow(value.primary),
+    secondary: usageWindow(value.secondary),
+  };
+}
+
 function devicePrompt(value: any) {
   if (value?.type !== 'chatgptDeviceCode') throw new Error('account_login_unsupported');
   const loginId = identifier(value.loginId);
@@ -74,6 +95,7 @@ export class AccountService {
   private readonly onAccountChanged?: () => void;
   private login: LoginAttempt | null = null;
   private mutating = false;
+  private accountRevision = 0;
   private loginStart: Promise<any> | null = null;
   private loginCancel: Promise<any> | null = null;
   private loginExpiryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -93,6 +115,7 @@ export class AccountService {
     if (this.closed) throw new Error('account_service_closed');
     const owner = identifier(clientDeviceId);
     this.expire();
+    if (action === 'account.rateLimits.read') return this.readRateLimits();
     if (action === 'account.sessions.list') return this.list(payload.refreshWorkspaceMetadata !== false);
     if (action === 'account.login.status' || action === 'account.login.cancel') {
       this.validateLoginRequest(owner, payload.loginId);
@@ -112,6 +135,26 @@ export class AccountService {
       this.finishLogin(this.login, 'cancelled');
       if (this.login.loginId) void this.transport.request('account/login/cancel', { loginId: this.login.loginId }).catch(() => {});
     }
+  }
+
+  private async readRateLimits() {
+    const changingAccount = () => this.mutating || this.login?.status === 'pending';
+    if (changingAccount()) throw new Error('account_operation_in_progress');
+    const revision = this.accountRevision;
+    let result: any;
+    try { result = await this.transport.request('account/rateLimits/read', {}); }
+    catch { throw new Error('account_rate_limits_unavailable'); }
+    if (this.closed || revision !== this.accountRevision || changingAccount()) {
+      throw new Error('account_rate_limits_unavailable');
+    }
+    if (!result || typeof result !== 'object') throw new Error('account_rate_limits_unavailable');
+    const limits = result.rateLimitsByLimitId;
+    const entries = limits && typeof limits === 'object' && !Array.isArray(limits)
+      ? Object.entries(limits).slice(0, 24).flatMap(([id, value]) => {
+        const limit = usageLimit(value);
+        return /^[a-z0-9_-]{1,64}$/i.test(id) && limit ? [[id, limit] as const] : [];
+      }) : [];
+    return { rateLimits: usageLimit(result.rateLimits), rateLimitsByLimitId: Object.fromEntries(entries) };
   }
 
   private async list(refreshWorkspaceMetadata: boolean) {
@@ -250,6 +293,7 @@ export class AccountService {
 
   private notification(method: string, params: JsonObject) {
     this.expire();
+    if (method === 'account/updated') this.accountRevision++;
     const attempt = this.login;
     if (this.closed || method !== 'account/login/completed' || !attempt
       || typeof params.loginId !== 'string') return;
@@ -278,6 +322,7 @@ export class AccountService {
   }
 
   private accountChanged() {
+    this.accountRevision++;
     try { void Promise.resolve(this.onAccountChanged?.()).catch(() => {}); }
     catch { /* The auth change is already committed; a UI callback cannot undo it. */ }
   }

@@ -52,6 +52,7 @@ import {
   type TurnDiffDocument,
 } from './turn-diffs.js';
 import { loadSessionModelSettings, saveSessionModelSettings } from './session-model-settings.js';
+import type { ManagedSessions } from './managed-sessions.js';
 
 const RPC_TIMEOUT_MS = 20_000;
 const SUMMARY_LIMIT = 4_000;
@@ -73,6 +74,7 @@ type CodexAppServerOptions = {
   networkAccess?: boolean;
   allowFullAccess?: boolean;
   modelSettingsPath?: string;
+  managedSessions?: Pick<ManagedSessions, 'has' | 'add'>;
 };
 type PendingRpc = {
   method: string;
@@ -140,6 +142,7 @@ export class CodexAppServer extends EventEmitter {
   private compactionProgress = new CompactionProgressReader();
   private inflightRpcs = new Set<Promise<unknown>>();
   private releaseRuntimeAfterTurn: boolean;
+  private readonly managedSessions?: CodexAppServerOptions['managedSessions'];
   sessionMetadata: Map<string, SessionMetadata>;
   sessionModelSettings: Map<string, RolloutModelSettings>;
   private modelSettingsPath: string | null;
@@ -166,6 +169,7 @@ export class CodexAppServer extends EventEmitter {
     this.approvals = new Map();
     this.threadRelease = Promise.resolve();
     this.releaseRuntimeAfterTurn = options.releaseRuntimeAfterTurn === true;
+    this.managedSessions = options.managedSessions;
     this.sessionMetadata = new Map();
     this.modelSettingsPath = options.modelSettingsPath ? resolve(options.modelSettingsPath) : null;
     this.sessionModelSettings = loadSessionModelSettings(this.modelSettingsPath);
@@ -889,9 +893,22 @@ export class CodexAppServer extends EventEmitter {
     return models;
   }
 
-  async startTurn({ text, threadId, cwd, clientId, requestId, permissionMode, edit }: StartTurnOptions) {
+  ownsManagedSession(threadId: string) {
+    return this.managedSessions?.has(threadId) === true;
+  }
+
+  async startLegacyTurn({ text, threadId, clientId, requestId }: StartTurnOptions, checkDesktop: () => Promise<void>) {
+    if (!this.managedSessions || typeof threadId !== 'string' || !threadId.trim()) {
+      throw new Error('legacy_session_state_unavailable');
+    }
+    // Keep the old thread's settings. Only later, explicit choices change permissions.
+    return this.startTurn({ text, threadId, clientId, requestId }, checkDesktop);
+  }
+
+  async startTurn({ text, threadId, cwd, clientId, requestId, permissionMode, edit }: StartTurnOptions,
+    checkLegacyDesktop?: () => Promise<void>) {
     let resolvedThreadId = String(threadId || '').trim();
-    // Desktop first turns share a temporary runtime which must fully release
+    // Connector-managed Windows turns share a temporary runtime which must fully release
     // its writer before another task can start. Headless tasks remain parallel.
     if (this.releaseRuntimeAfterTurn) {
       await this.threadRelease;
@@ -925,12 +942,15 @@ export class CodexAppServer extends EventEmitter {
       await this.ensureStarted();
       if (this.activeTurns.get(key) !== turnContext || turnContext.cancelRequested) throw new Error('turn_cancelled');
       if (resolvedThreadId) {
-        const cachedMetadata = this.sessionMetadata.get(resolvedThreadId);
+        const cachedMetadata = checkLegacyDesktop ? undefined : this.sessionMetadata.get(resolvedThreadId);
         if (cachedMetadata?.cwd) {
           turnCwd = resolveAllowedWorkspace(this.allowedRoots, cachedMetadata.cwd);
         } else {
           const metadata = await this.rpcRaw('thread/read', { threadId: resolvedThreadId, includeTurns: false });
           if (!metadata?.thread?.cwd) throw new Error('session_project_directory_unavailable');
+          if (checkLegacyDesktop && (metadata.thread.id !== resolvedThreadId || metadata.thread.canAcceptDirectInput === false)) {
+            throw new Error('legacy_session_state_unavailable');
+          }
           turnCwd = resolveAllowedWorkspace(this.allowedRoots, metadata.thread.cwd);
         }
       } else {
@@ -943,9 +963,26 @@ export class CodexAppServer extends EventEmitter {
       const threadParams = isNewThread && permissions
         ? { cwd: turnCwd, ...permissions.thread } : { cwd: turnCwd };
       if (resolvedThreadId) {
-        const result = await this.resumeThread(resolvedThreadId, threadParams, turnContext);
-        const resumedId = result?.thread?.id || result?.id || resolvedThreadId;
+        if (checkLegacyDesktop) {
+          await checkLegacyDesktop();
+          if (this.activeTurns.get(key) !== turnContext || turnContext.cancelRequested) throw new Error('turn_cancelled');
+          // If resume times out, our runtime may already hold the writer.
+          // Its normal release path can clean it up without touching Desktop.
+          subscribedThreadId = resolvedThreadId;
+        }
+        const result = await this.resumeThread(resolvedThreadId,
+          checkLegacyDesktop ? { ...threadParams, excludeTurns: true } : threadParams, turnContext);
+        const resumedId = result?.thread?.id || result?.id || (checkLegacyDesktop ? '' : resolvedThreadId);
         if (resumedId !== resolvedThreadId) throw new Error('session_delivery_mismatch');
+        if (checkLegacyDesktop) {
+          const resumed = result?.thread;
+          const state = resumed?.status;
+          if ((state?.type || state) !== 'idle'
+              || (Array.isArray(state?.activeFlags) && state.activeFlags.length)) throw new Error('legacy_session_busy');
+          if (!resumed?.cwd || resumed.canAcceptDirectInput === false) throw new Error('legacy_session_state_unavailable');
+          const resumedCwd = resolveAllowedWorkspace(this.allowedRoots, resumed.cwd);
+          if (resumedCwd !== turnCwd) throw new Error('session_delivery_mismatch');
+        }
       } else {
         const result = await this.rpcRaw('thread/start', threadParams);
         resolvedThreadId = result?.thread?.id || result?.id || result?.threadId;
@@ -957,6 +994,8 @@ export class CodexAppServer extends EventEmitter {
       if (key !== resolvedThreadId && this.activeTurns.has(resolvedThreadId)) throw new Error('session_delivery_mismatch');
       subscribedThreadId = resolvedThreadId;
       if (this.activeTurns.get(key) !== turnContext || turnContext.cancelRequested) throw new Error('turn_cancelled');
+      // New IDs or an existing ID whose idle writer this runtime just acquired.
+      if (isNewThread || checkLegacyDesktop) this.managedSessions?.add(resolvedThreadId);
       if (key !== resolvedThreadId) {
         this.activeTurns.delete(key);
         key = resolvedThreadId;
@@ -1030,8 +1069,8 @@ export class CodexAppServer extends EventEmitter {
       .then(() => this.rpcRaw('thread/unsubscribe', { threadId: resolvedThreadId }))
       .finally(async () => {
         // Current hosts may retain an unsubscribed writer for minutes. Desktop
-        // mode only uses this runtime for first turns; release our OWN idle child
-        // before handing that same task to Desktop. Never stop a replacement or
+        // mode releases our OWN idle child so it cannot block the desktop
+        // if the user later opens the chat there. Never stop a replacement or
         // a runtime executing another turn. Headless environments keep theirs.
         if (!this.releaseRuntimeAfterTurn || !child || this.child !== child || this.activeTurns.size) return;
         let finishRelease!: () => void;

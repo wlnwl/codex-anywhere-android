@@ -111,10 +111,11 @@ test('connector secure channel authenticates, decrypts requests, and encrypts re
     identity: connectorIdentity,
     deviceId: 'personal-pc',
     send: (frame) => { sent.push(frame); return true; },
-    handleRequest: async (frame) => ({
-      type: 'response', clientId: frame.clientId, requestId: frame.requestId,
-      ok: true, data: { echoed: frame.payload.text },
-    }),
+    handleRequest: async (frame) => {
+      assert.equal(frame.clientChannelId, offer.channelId);
+      return { type: 'response', clientId: frame.clientId, requestId: frame.requestId,
+        ok: true, data: { echoed: frame.payload.text } };
+    },
   });
 
   assert.equal(await manager.handle({ type: 'channel.offer', clientId: 'client-1', offer }), true);
@@ -142,7 +143,7 @@ test('connector secure channel authenticates, decrypts requests, and encrypts re
   await manager.handle({
     type: 'secure', clientId: 'client-1',
     envelope: browser.seal({
-      type: 'request', requestId: 'r1', action: 'echo', payload: { text: 'hello' },
+      type: 'request', requestId: 'r1', action: 'echo', clientChannelId: 'invented', payload: { text: 'hello' },
     }),
   });
   const acknowledgement = sent.shift()!;
@@ -337,6 +338,12 @@ test('a response from a replaced channel cannot tear down the current channel', 
   const current = await connect();
   finishRequest?.();
   await oldRequest;
+  assert.equal(sent.length, 0);
+  assert.equal(manager.hasChannel('client-1', first.channelId), false);
+  assert.equal(manager.hasChannel('client-1', current.channelId), true);
+  assert.equal(manager.sendEvent({
+    type: 'event', clientId: 'client-1', event: 'task.notification', payload: { kind: 'completed' },
+  }, first.channelId), false);
   assert.equal(sent.length, 0);
   assert.equal(manager.sendEvent({
     type: 'event', clientId: 'client-1', event: 'turn.delta', payload: { delta: 'current' },

@@ -4,7 +4,7 @@
   var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-  // node_modules/@noble/ed25519/index.js
+  // ../codex_anywhere/node_modules/@noble/ed25519/index.js
   var freeze = Object.freeze;
   var P = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn;
   var N = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn;
@@ -499,7 +499,7 @@
     return { p, f };
   };
 
-  // node_modules/@noble/hashes/_u64.js
+  // ../codex_anywhere/node_modules/@noble/hashes/_u64.js
   var U32_MASK64 = /* @__PURE__ */ (() => BigInt(2 ** 32 - 1))();
   var _32n = /* @__PURE__ */ BigInt(32);
   function fromBig(n, le = false) {
@@ -542,7 +542,7 @@
   var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
   var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
-  // node_modules/@noble/hashes/utils.js
+  // ../codex_anywhere/node_modules/@noble/hashes/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -702,7 +702,7 @@
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // node_modules/@noble/hashes/_md.js
+  // ../codex_anywhere/node_modules/@noble/hashes/_md.js
   function Chi(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -833,7 +833,7 @@
     327033209
   ]);
 
-  // node_modules/@noble/hashes/sha2.js
+  // ../codex_anywhere/node_modules/@noble/hashes/sha2.js
   var SHA256_K = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -1293,7 +1293,7 @@
     return verify(hexToBytes2(signature), bytes, hexToBytes2(identity2.publicKey));
   }
 
-  // node_modules/@noble/ciphers/utils.js
+  // ../codex_anywhere/node_modules/@noble/ciphers/utils.js
   function isBytes3(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -1480,7 +1480,7 @@
     return cr.getRandomValues(new Uint8Array(bytesLength));
   }
 
-  // node_modules/@noble/hashes/hmac.js
+  // ../codex_anywhere/node_modules/@noble/hashes/hmac.js
   var _HMAC = class {
     constructor(hash, key) {
       __publicField(this, "oHash");
@@ -1557,7 +1557,7 @@
     return hmac_;
   })();
 
-  // node_modules/@scure/base/index.js
+  // ../codex_anywhere/node_modules/@scure/base/index.js
   var freeze2 = (fn) => Object.freeze(fn());
   function isBytes4(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
@@ -1759,7 +1759,7 @@
     return bytesToHex2(hmac(sha256, hexToBytes2(verifier), utf8ToBytes(transcript)));
   }
 
-  // node_modules/@noble/ciphers/_arx.js
+  // ../codex_anywhere/node_modules/@noble/ciphers/_arx.js
   var encodeStr = (str) => Uint8Array.from(str.split(""), (c) => c.charCodeAt(0));
   var sigma16_32 = /* @__PURE__ */ (() => swap32IfBE(u32(encodeStr("expand 16-byte k"))))();
   var sigma32_32 = /* @__PURE__ */ (() => swap32IfBE(u32(encodeStr("expand 32-byte k"))))();
@@ -1889,7 +1889,7 @@
     };
   }
 
-  // node_modules/@noble/ciphers/_poly1305.js
+  // ../codex_anywhere/node_modules/@noble/ciphers/_poly1305.js
   function u8to16(a, i) {
     return a[i++] & 255 | (a[i++] & 255) << 8;
   }
@@ -2140,7 +2140,7 @@
   };
   var poly1305 = /* @__PURE__ */ wrapMacConstructor(32, (key) => new Poly1305(key));
 
-  // node_modules/@noble/ciphers/chacha.js
+  // ../codex_anywhere/node_modules/@noble/ciphers/chacha.js
   function chachaCore(s, k, n, out, cnt, rounds = 20) {
     let y00 = s[0], y01 = s[1], y02 = s[2], y03 = s[3], y04 = k[0], y05 = k[1], y06 = k[2], y07 = k[3], y08 = k[4], y09 = k[5], y10 = k[6], y11 = k[7], y12 = cnt, y13 = n[0], y14 = n[1], y15 = n[2];
     let x00 = y00, x01 = y01, x02 = y02, x03 = y03, x04 = y04, x05 = y05, x06 = y06, x07 = y07, x08 = y08, x09 = y09, x10 = y10, x11 = y11, x12 = y12, x13 = y13, x14 = y14, x15 = y15;
@@ -2311,7 +2311,7 @@
     /* @__PURE__ */ _poly1305_aead(xchacha20)
   );
 
-  // node_modules/@noble/curves/utils.js
+  // ../codex_anywhere/node_modules/@noble/curves/utils.js
   function aarray(item, title, inner = () => {
   }) {
     if (!Array.isArray(item))
@@ -2430,7 +2430,7 @@
     iter(optFields, true);
   }
 
-  // node_modules/@noble/curves/abstract/modular.js
+  // ../codex_anywhere/node_modules/@noble/curves/abstract/modular.js
   var _0n2 = /* @__PURE__ */ BigInt(0);
   var _1n2 = /* @__PURE__ */ BigInt(1);
   var _2n = /* @__PURE__ */ BigInt(2);
@@ -2859,7 +2859,7 @@
     return new _Field(ORDER, opts);
   }
 
-  // node_modules/@noble/curves/abstract/curve.js
+  // ../codex_anywhere/node_modules/@noble/curves/abstract/curve.js
   var _0n3 = /* @__PURE__ */ BigInt(0);
   var _1n3 = /* @__PURE__ */ BigInt(1);
   var _4n2 = /* @__PURE__ */ BigInt(4);
@@ -3246,7 +3246,7 @@
     };
   }
 
-  // node_modules/@noble/curves/abstract/edwards.js
+  // ../codex_anywhere/node_modules/@noble/curves/abstract/edwards.js
   var _0n4 = /* @__PURE__ */ BigInt(0);
   var _1n4 = /* @__PURE__ */ BigInt(1);
   var _2n2 = /* @__PURE__ */ BigInt(2);
@@ -3541,7 +3541,7 @@
     return Point2;
   }
 
-  // node_modules/@noble/curves/abstract/montgomery.js
+  // ../codex_anywhere/node_modules/@noble/curves/abstract/montgomery.js
   var _0n5 = /* @__PURE__ */ BigInt(0);
   var _1n5 = /* @__PURE__ */ BigInt(1);
   var _2n3 = /* @__PURE__ */ BigInt(2);
@@ -3688,7 +3688,7 @@
     });
   }
 
-  // node_modules/@noble/curves/ed25519.js
+  // ../codex_anywhere/node_modules/@noble/curves/ed25519.js
   var _0n6 = /* @__PURE__ */ BigInt(0);
   var _1n6 = /* @__PURE__ */ BigInt(1);
   var _2n4 = /* @__PURE__ */ BigInt(2);
@@ -3774,7 +3774,7 @@
     });
   })();
 
-  // node_modules/@noble/hashes/hkdf.js
+  // ../codex_anywhere/node_modules/@noble/hashes/hkdf.js
   var HKDF_COUNTER = /* @__PURE__ */ Uint8Array.of(0);
   var EMPTY_BUFFER = /* @__PURE__ */ Uint8Array.of();
   function expand(hash, prk, info, length = 32, _recycled) {
@@ -4262,10 +4262,12 @@ directional-keys`),
   };
 
   // mobile-android/engine/protocol.ts
-  var emit = (type, data = {}) => Native.emit(JSON.stringify({ type, ...data }));
+  var emit = (type, data = {}) => Native.emit(JSON.stringify({ type, relayOrigin, ...data }));
   var MAX_CHANNEL_ATTEMPTS = 3;
   var CHANNEL_TIMEOUT_MS = 8e3;
   var MAX_RELAY_ATTEMPTS = 5;
+  var TASK_WATCH_INTERVAL_MS = 15e3;
+  var TASK_WATCH_REQUEST_PREFIX = "native-task-watch-";
   var TRANSIENT_RELAY_CLOSE_CODES = /* @__PURE__ */ new Set([1e3, 1001, 1006, 1011, 1012, 1013, 1014, 4005]);
   var socket = null;
   var channel = null;
@@ -4278,6 +4280,7 @@ directional-keys`),
   var channelAttempts = 0;
   var devices = [];
   var onlineDevices = /* @__PURE__ */ new Set();
+  var inventoryComplete = false;
   var retryTimer = null;
   var handshakeTimer = null;
   var foreground = false;
@@ -4286,6 +4289,9 @@ directional-keys`),
   var relayAttempts = 0;
   var relayTarget = null;
   var relayRetryTimer = null;
+  var taskWatchThread = "";
+  var taskWatchSequence = 0;
+  var taskWatchTimer = null;
   try {
     const saved = JSON.parse(Native.identity());
     identity = createDeviceIdentity(saved.privateKey);
@@ -4301,6 +4307,7 @@ directional-keys`),
   function clearChannel() {
     ++channelEpoch;
     clearTimers();
+    stopTaskWatchTimer();
     channel?.clear();
     channel = null;
   }
@@ -4319,13 +4326,40 @@ directional-keys`),
   function canConnectDevice() {
     return isRelayReady() && Boolean(route) && onlineDevices.has(route);
   }
+  function stopTaskWatchTimer() {
+    if (taskWatchTimer !== null) clearTimeout(taskWatchTimer);
+    taskWatchTimer = null;
+  }
+  function sendTaskWatch(threadId) {
+    return !!(canConnectDevice() && channel?.isReady() && channel.sendFrame({
+      type: "request",
+      requestId: TASK_WATCH_REQUEST_PREFIX + ++taskWatchSequence,
+      action: "task.notifications.watch",
+      payload: threadId ? { threadId } : { threadIds: [] }
+    }));
+  }
+  function renewTaskWatch() {
+    stopTaskWatchTimer();
+    if (!taskWatchThread || !canConnectDevice() || !channel?.isReady()) return;
+    const generation = channelEpoch;
+    sendTaskWatch(taskWatchThread);
+    taskWatchTimer = setTimeout(() => {
+      if (generation === channelEpoch) renewTaskWatch();
+    }, TASK_WATCH_INTERVAL_MS);
+  }
+  function clearTaskWatch() {
+    if (taskWatchThread) sendTaskWatch("");
+    taskWatchThread = "";
+    stopTaskWatchTimer();
+  }
   function emitInventory() {
     emit("devices", {
       devices,
       selectedDeviceId: route,
       selectedOnline: Boolean(route) && onlineDevices.has(route),
       channelReady: channel?.isReady() === true,
-      relayAuthenticated: isRelayReady()
+      relayAuthenticated: isRelayReady(),
+      inventoryComplete
     });
   }
   function channelFailed(expected, message) {
@@ -4358,7 +4392,10 @@ directional-keys`),
       routeDeviceId: selected,
       send: (frame) => current() && send(frame),
       onFrame: (frame) => {
-        if (current()) emit("frame", { frame, deviceId: selected });
+        if (!current()) return;
+        if ((frame.type === "response" || frame.type === "ack") && String(frame.requestId || "").startsWith(TASK_WATCH_REQUEST_PREFIX)) return;
+        if (frame.type === "event" && frame.event === "task.notification" && (!taskWatchThread || frame.payload?.threadId !== taskWatchThread)) return;
+        emit("frame", { frame, deviceId: selected });
       },
       onReady: () => {
         if (!current()) return;
@@ -4366,6 +4403,7 @@ directional-keys`),
         handshakeTimer = null;
         channelAttempts = 0;
         emit("ready", { deviceId: selected });
+        if (current()) renewTaskWatch();
       },
       onError: () => {
         if (current()) channelFailed(next, "\u7535\u8111\u7684\u5B89\u5168\u8FDE\u63A5\u5DF2\u5931\u6548\uFF0C\u6B63\u5728\u91CD\u65B0\u9A8C\u8BC1");
@@ -4391,7 +4429,8 @@ directional-keys`),
   }
   function updatePresence(message) {
     const previousOnline = Boolean(route) && onlineDevices.has(route);
-    devices = Array.isArray(message.environments) ? message.environments : Array.isArray(message.devices) ? message.devices : [];
+    inventoryComplete = Array.isArray(message.environments);
+    devices = inventoryComplete ? message.environments : Array.isArray(message.devices) ? message.devices : [];
     onlineDevices = new Set(Array.isArray(message.devices) ? message.devices.filter((id) => typeof id === "string") : devices.filter((item) => typeof item === "string" || item?.online === true).map((item) => typeof item === "string" ? item : item.id));
     const online = Boolean(route) && onlineDevices.has(route);
     if (route && !online) {
@@ -4427,6 +4466,7 @@ directional-keys`),
     }, delay);
   }
   function openRelay(target, pairing, retrying) {
+    if (target.origin !== relayOrigin) clearTaskWatch();
     const connection = ++epoch;
     clearChannel();
     const previous = socket;
@@ -4436,6 +4476,7 @@ directional-keys`),
     channelAttempts = 0;
     onlineDevices.clear();
     devices = [];
+    inventoryComplete = false;
     if (target.origin !== relayOrigin) route = "";
     relayOrigin = target.origin;
     const currentSocket = new WebSocket("wss://" + target.host + "/ws");
@@ -4485,6 +4526,7 @@ directional-keys`),
       authenticated = false;
       onlineDevices.clear();
       devices = [];
+      inventoryComplete = false;
       relayRetryPending = relayRecoveryAllowed && relayAttempts < MAX_RELAY_ATTEMPTS && TRANSIENT_RELAY_CLOSE_CODES.has(event.code);
       if (!relayRetryPending) relayRecoveryAllowed = false;
       emit("disconnected", {
@@ -4524,6 +4566,7 @@ directional-keys`),
   globalThis.selectDevice = (id) => {
     const selected = String(id || "").trim();
     if (!selected) return;
+    if (selected !== route) clearTaskWatch();
     route = selected;
     clearChannel();
     channelAttempts = 0;
@@ -4537,12 +4580,25 @@ directional-keys`),
     else if (canConnectDevice()) startChannel();
     else emit("disconnected", { scope: "device", selectedDeviceId: route, message: "\u7535\u8111\u5C1A\u672A\u5728\u7EBF\uFF0C\u8BF7\u68C0\u67E5\u8FDE\u63A5\u5668" });
   };
+  globalThis.watchTaskNotifications = (threadId, refresh = false) => {
+    const next = typeof threadId === "string" && threadId.length <= 128 ? threadId.trim() : "";
+    if (next === taskWatchThread) {
+      if (next && refresh === true) renewTaskWatch();
+      return;
+    }
+    if (!next) clearTaskWatch();
+    else if (route) {
+      taskWatchThread = next;
+      renewTaskWatch();
+    }
+  };
   globalThis.request = (requestId, action, payload) => {
     if (!canConnectDevice() || !channel?.sendFrame({ type: "request", requestId, action, payload })) {
       emit("requestFailed", { requestId, message: "\u8BBE\u5907\u5C1A\u672A\u8FDE\u63A5\uFF0C\u6307\u4EE4\u672A\u53D1\u9001" });
     }
   };
   globalThis.cancelConnection = () => {
+    clearTaskWatch();
     ++epoch;
     clearChannel();
     clearRelayRetryTimer();
@@ -4552,6 +4608,7 @@ directional-keys`),
     authenticated = false;
     onlineDevices.clear();
     devices = [];
+    inventoryComplete = false;
     const previous = socket;
     socket = null;
     previous?.close(1e3, "connection cancelled");

@@ -122,6 +122,9 @@ export class DesktopUserInput {
 }
 
 export function classifyDesktopError(error: unknown, mutation: boolean): Error {
+  if (error instanceof NativeRequestError && !error.dispatched && error.code === 'desktop_input_pipe_missing') {
+    return new Error('desktop_input_pipe_missing');
+  }
   if (error instanceof NativeRequestError && error.code === 'desktop_host_error') {
     if (['request-version-mismatch', 'no-handler-for-request'].includes(error.message)) return new Error('desktop_input_unsupported');
     if (error.message === 'no-client-found') return new Error('desktop_input_not_ready');

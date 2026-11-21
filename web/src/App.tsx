@@ -239,6 +239,13 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const [sessionSearch, setSessionSearch] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === threadId) || null,
+    [sessions, threadId],
+  );
+  const isManagedSession = activeSession?.executionRoute === 'appServer';
+  const managedThreadIdRef = useRef<string | null>(null);
+  managedThreadIdRef.current = isManagedSession ? activeSession.id : null;
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [editTarget, setEditTarget] = useState<{ item: TimelineItem; threadId: string; environment: string; selection: number } | null>(null);
   const [editingMessage, setEditingMessage] = useState(false);
@@ -267,9 +274,12 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<ImageUploadState | null>(null);
   const [messageDelivery, setMessageDelivery] = useState<MessageDelivery | null>(null);
+  const [desktopTextDelivery, setDesktopTextDelivery] = useState<Pick<MessageDelivery,
+    'environmentId' | 'selectionVersion' | 'threadId'> & { legacyStateUnavailable?: boolean } | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [nativeState, setNativeState] = useState<{ environmentId: string; value: NativeDesktopState } | null>(null);
-  const desktopState = online && nativeState?.environmentId === environmentId && nativeState.value.threadId === threadId ? nativeState.value : null;
+  const desktopState = online && !isManagedSession
+    && nativeState?.environmentId === environmentId && nativeState.value.threadId === threadId ? nativeState.value : null;
   const approvalRef = useRef(approval);
   approvalRef.current = approval;
   const approvalPollRef = useRef<ReturnType<typeof createApprovalPoller> | null>(null);
@@ -584,7 +594,10 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     refreshPermissionConfig,
     openPermissionSettingsOnDesktop,
   } = useSessionConfiguration({ environmentId, online, threadId, request, desktopState,
-    recoveryKey: `${connectionEpoch}:${resumeEpoch}` });
+    recoveryKey: `${connectionEpoch}:${resumeEpoch}:${isManagedSession ? 'appServer' : ''}` });
+  const legacyAppServerAvailable = Boolean(threadId && !isManagedSession && connectorStatus?.capabilities.legacySessionAppServer);
+  const legacyAppServerBusy = legacyAppServerAvailable && !running
+    && (executionState === 'running' || executionState === 'waiting');
 
   const replayPendingRequests = useCallback(() => {
     if (!secureChannelRef.current?.isReady()) return 0;
@@ -599,11 +612,6 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     }
     return [...attachments.values()];
   }, [environmentId, knownAttachments, threadId, timeline]);
-
-  const activeSession = useMemo(
-    () => sessions.find((session) => session.id === threadId) || null,
-    [sessions, threadId],
-  );
 
   const { attachmentUrls, rememberImage, retryImages } = useTimelineImages(
     `${environmentId}:${threadId}:${selectedRequestRef.current}`, timelineAttachments, online, connectionEpoch, request,
@@ -749,6 +757,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (!connected) {
         secureChannelRef.current?.clear();
         secureChannelRef.current = null;
+        requestManagerRef.current!.interrupt();
         connectorOnlineRef.current = false;
         setOnline(false);
         setStatusText(environmentOfflineLabel(routeDeviceId, environmentLabelsRef.current));
@@ -777,7 +786,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     }
     const eventThreadId = String(payload.threadId || '');
     if (message.event === 'desktop.state') {
-      if (eventThreadId === threadIdRef.current) {
+      if (eventThreadId === threadIdRef.current && eventThreadId !== managedThreadIdRef.current) {
         const state = payload as NativeDesktopState;
         setNativeState({ environmentId: environmentIdRef.current, value: state });
         approvalPollRef.current?.push({ approvals: state.approvals || [], desktopState: { ...state, waitingOnApproval: Boolean(state.waitingOnApproval) },
@@ -1024,6 +1033,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     if (existing) {
       socketRef.current = null;
       existing.close(1000, 'connection replaced');
+      requestManagerRef.current!.interrupt();
     }
     // The detached socket's close callback cannot clean up a replacement.
     // Invalidate its channel and reads before exposing the new connection.
@@ -1097,6 +1107,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       connectorOnlineRef.current = false;
       secureChannelRef.current?.clear();
       secureChannelRef.current = null;
+      requestManagerRef.current!.interrupt();
       setConnecting(false);
       setOnline(false);
       executionVersionRef.current += 1;
@@ -1787,17 +1798,20 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     newSessionAutoSendRef.current = true;
   }, [closeNewSessionDialog, newSessionCwd, newSessionAttachment, newSessionPrompt, newSessionPermissionMode, online, uploading, connectorStatus?.capabilities.fullAccess, selectSession, setNewSessionAttachment, setPendingAttachment]);
 
-  const sendTurn = useCallback(async (questionReplies?: QuestionReply[]) => {
+  const sendTurn = useCallback(async (questionReplies?: QuestionReply[], viaDesktopTool = false) => {
     // A question response is independent of the message/attachment draft.
     if (questionReplies && (!threadId || threadId !== threadIdRef.current)) return;
     const text = questionReplies ? buildQuestionReply(questionReplies) : prompt.trim();
     const attachment = questionReplies ? null : pendingAttachment;
     const targetThreadId = threadIdRef.current;
+    const legacyAppServerForTarget = targetThreadId === threadId && legacyAppServerAvailable;
+    const executionRoute = activeSession && activeSession.id === targetThreadId ? activeSession.executionRoute : undefined;
     const sendKey = JSON.stringify([environmentIdRef.current, targetThreadId || NEW_TURN_KEY]);
+    const selectionVersion = selectedRequestRef.current;
     const steering = canSteerOwnedTurn(
       running, executionState, ownedTurnThreadId, targetThreadId,
     );
-    const directDesktopDelivery = canSendToActiveDesktopTurn(
+    const directDesktopDelivery = executionRoute !== 'appServer' && !legacyAppServerForTarget && canSendToActiveDesktopTurn(
       running, executionState, ownedTurnThreadId, targetThreadId,
     );
     if (
@@ -1805,13 +1819,17 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       || uploading
       || sendingRef.current.has(sendKey)
       || (running && !steering)
+      || (targetThreadId === threadId && legacyAppServerBusy)
       || (steering && Boolean(attachment))
     ) return;
+    if (viaDesktopTool && (!online || running || questionReplies || attachment || !targetThreadId || executionRoute === 'appServer'
+      || desktopTextDelivery?.environmentId !== environmentIdRef.current
+      || !isCurrentSessionRequest(desktopTextDelivery.threadId, targetThreadId,
+        desktopTextDelivery.selectionVersion, selectionVersion))) return;
     const isExistingSession = Boolean(targetThreadId);
     const selectedPermissionMode = isExistingSession
       ? permissionConfig?.mode
       : normalizePermissionMode(loadEnvironmentValue(SESSION_PERMISSION_MODE_KEY, environmentIdRef.current));
-    const selectionVersion = selectedRequestRef.current;
     const projectCwd = newSessionCwd.trim();
     if (!isExistingSession && !projectCwd) {
       addTimeline('error', t('请先填写新会话的项目目录。', 'Enter a project directory for the new session.'));
@@ -1873,7 +1891,8 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         const imageMessage = buildImageMessage(text, uploaded);
         turnText = imageMessage.turnText;
         visibleText = imageMessage.visibleText;
-        if (isExistingSession && !steering && connectorStatus?.capabilities.desktopNativeImages) {
+        if (isExistingSession && executionRoute !== 'appServer' && !legacyAppServerForTarget
+          && !steering && connectorStatus?.capabilities.desktopNativeImages) {
           nativeImage = { path: uploaded.path };
           turnText = text || t('请查看这张图片。', 'Please inspect this image.');
           visibleText = turnText;
@@ -1907,7 +1926,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (!steering) {
         // Desktop delivery must never temporarily claim app-server ownership:
         // stop is enabled only after native state identifies the actual turn.
-        const owned = ownsPendingSubmission(isExistingSession, connectorStatus?.mode);
+        const owned = ownsPendingSubmission(isExistingSession, connectorStatus?.mode, executionRoute);
         runningRef.current = owned;
         ownedTurnThreadIdRef.current = owned ? targetThreadId || NEW_TURN_KEY : null;
         updateExecution({
@@ -1920,13 +1939,18 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         });
       }
       const action = steering ? 'turn.steer' : 'turn.start';
-      const data = await request<TurnStartResult>(action, {
+      const data = await request<TurnStartResult>(action, viaDesktopTool ? {
+        threadId: targetThreadId,
+        text: turnText,
+        delivery: 'desktop_tool',
+      } : {
         text: turnText,
         ...(nativeImage ? { image: nativeImage } : {}),
         threadId: targetThreadId,
         ...(steering ? {} : {
           cwd: isExistingSession ? '' : projectCwd,
-          ...(selectedPermissionMode && selectedPermissionMode !== 'custom' ? { permissionMode: selectedPermissionMode } : {}),
+          ...(selectedPermissionMode && selectedPermissionMode !== 'custom' && !legacyAppServerForTarget
+            ? { permissionMode: selectedPermissionMode } : {}),
           ...(directDesktopDelivery ? { preferDesktop: true } : {}),
         }),
       }, { onRequestId: requestId => {
@@ -1941,7 +1965,10 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       const selectionStillCurrent = isCurrentSessionRequest(
         targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current,
       ) || Boolean(visibleDelivery(receipt, environmentIdRef.current, threadIdRef.current, selectedRequestRef.current));
-      if (selectionStillCurrent) setMessageDelivery(receipt);
+      if (selectionStillCurrent) {
+        setMessageDelivery(receipt);
+        if (!viaDesktopTool) setDesktopTextDelivery(null);
+      }
       if (data.threadId) {
         if (!isExistingSession) {
           const createdSession = {
@@ -1950,6 +1977,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
             cwd: projectCwd,
             updatedAt: Date.now(),
             status: 'inProgress',
+            ...(data.executionRoute === 'appServer' ? { executionRoute: data.executionRoute } : {}),
           } satisfies Session;
           setSessions((current) => [
             createdSession,
@@ -1968,6 +1996,13 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         } else if (selectionStillCurrent) {
           ownedTurnThreadIdRef.current = data.delivery === 'desktop' ? null : data.threadId;
           updateExecution({ ownedTurnThreadId: ownedTurnThreadIdRef.current });
+        }
+        if (isExistingSession && executionRoute !== 'appServer' && data.executionRoute === 'appServer') {
+          setSessions((current) => current.map((session) => session.id === data.threadId
+            ? { ...session, executionRoute: 'appServer' } : session));
+          // An older list response may not know this session has changed routes.
+          sessionRefreshInFlightRef.current = null;
+          void refreshSessions();
         }
         if (timelineAttachment) rememberAttachment(data.threadId, visibleText, timelineAttachment);
       }
@@ -1993,7 +2028,14 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       }
       return true;
     } catch (error) {
-      setMessageDelivery((current) => current?.id === delivery.id ? { ...current, status: 'unconfirmed' } : current);
+      const errorCode = error instanceof Error ? error.message : '';
+      const nativePipeMissing = errorCode === 'desktop_input_pipe_missing';
+      const legacyStateUnavailable = errorCode === 'legacy_session_state_unavailable';
+      const useNativeInput = ['desktop_input_available', 'legacy_session_native_available'].includes(errorCode);
+      const rejectedBeforeSend = nativePipeMissing || legacyStateUnavailable || useNativeInput
+        || ['legacy_session_busy', 'thread_active_writer_conflict'].includes(errorCode);
+      setMessageDelivery((current) => current?.id !== delivery.id ? current
+        : rejectedBeforeSend ? null : { ...current, status: 'unconfirmed' });
       setUploading(false);
       const selectionStillCurrent = isCurrentSessionRequest(
         targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current,
@@ -2022,7 +2064,15 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (error instanceof Error && error.message === 'turn_cancelled') {
         return;
       }
-      if (error instanceof Error && ['desktop_delivery_unknown', 'desktop_delivery_timeout'].includes(error.message) && targetThreadId) {
+      if (!viaDesktopTool && (nativePipeMissing || legacyStateUnavailable) && !questionReplies
+        && targetThreadId && executionRoute !== 'appServer') {
+        setDesktopTextDelivery({ environmentId: delivery.environmentId, threadId: targetThreadId,
+          selectionVersion, legacyStateUnavailable });
+        return;
+      }
+      setDesktopTextDelivery(null);
+      const uncertainDelivery = ['desktop_delivery_unknown', 'desktop_delivery_timeout'].includes(errorCode);
+      if (uncertainDelivery && targetThreadId) {
         // Reconcile from persisted history; never automatically resend an uncertain delivery.
         await loadHistory(targetThreadId, null, selectionVersion);
         void refreshSessions();
@@ -2034,8 +2084,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (attachment) setUploadProgress(null);
     }
   }, [
-    addTimeline, connectorStatus, executionState, modelConfig, newSessionCwd, ownedTurnThreadId, pendingAttachment,
-    permissionConfig, prompt, threadId,
+    activeSession, addTimeline, connectorStatus, desktopTextDelivery, executionState, legacyAppServerAvailable, legacyAppServerBusy,
+    modelConfig, newSessionCwd, online, ownedTurnThreadId,
+    pendingAttachment, permissionConfig, prompt, threadId,
     loadHistory, refreshSessions, rememberAttachment, rememberImage, reportTimelineError, request, resetExecution, running,
     updateExecution, updateSessionAttention, uploading,
   ]);
@@ -2213,7 +2264,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       poller.stop();
       if (approvalPollRef.current === poller) approvalPollRef.current = null;
     };
-  }, [authenticated, connectionEpoch, environmentId, online, request, threadId, updateExecution]);
+  }, [authenticated, connectionEpoch, environmentId, isManagedSession, online, request, threadId, updateExecution]);
 
   const refreshApprovalStatus = useCallback(async () => {
     setRefreshingApproval(true);
@@ -2239,9 +2290,13 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const steeringAvailable = canSteerOwnedTurn(
     running, executionState, ownedTurnThreadId, threadId,
   );
-  const directDesktopDeliveryAvailable = canSendToActiveDesktopTurn(
+  const directDesktopDeliveryAvailable = !isManagedSession && !legacyAppServerAvailable && canSendToActiveDesktopTurn(
     running, executionState, ownedTurnThreadId, threadId,
   );
+  const offerDesktopTextDelivery = Boolean(threadId && !isManagedSession
+    && desktopTextDelivery?.environmentId === environmentId
+    && isCurrentSessionRequest(desktopTextDelivery.threadId, threadId,
+      desktopTextDelivery.selectionVersion, selectedRequestRef.current));
   const stopAvailable = canStopOwnedTurn(
     running, ownedTurnThreadId, threadId || (creatingNewSession ? NEW_TURN_KEY : null),
   ) || Boolean(desktopState?.canStop);
@@ -2588,7 +2643,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
           olderHistoryError={olderHistoryError}
           olderHistoryAutoLoadEnabled={olderHistoryAutoLoadEnabled}
           timeline={timeline}
-          questionReplyDisabled={!online || uploading || (running && !steeringAvailable)}
+          questionReplyDisabled={!online || uploading || legacyAppServerBusy || (running && !steeringAvailable)}
           onQuestionReply={answerQuestions}
           resolvedQuestionAnswers={resolvedQuestionAnswers}
           knownAttachments={knownAttachments}
@@ -2715,6 +2770,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
                   disabled={
                     !online
                     || uploading
+                    || legacyAppServerBusy
                     || (running && !steeringAvailable)
                     || (!prompt.trim() && !pendingAttachment)
                     || (!threadId && !newSessionCwd.trim())
@@ -2730,9 +2786,22 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               </button>
             </div>
           </div>
+          {offerDesktopTextDelivery && <div className="desktop-text-delivery">
+            <span>{pendingAttachment
+              ? t('通过桌面发送仅支持文字。请先移除附件。', 'Desktop text delivery requires removing the attachment.')
+              : desktopTextDelivery?.legacyStateUnavailable
+                ? t('连接器暂时无法确认会话状态。你仍可通过桌面工具发送文字。', 'The connector cannot verify the session state. You can still send text through the desktop tool.')
+                : t('桌面原生通道不可用，可以通过桌面工具发送文字。', 'You can use the desktop tool to send text while native input is unavailable.')}</span>
+            <button type="button" onClick={() => void sendTurn(undefined, true)}
+              disabled={!online || running || uploading || legacyAppServerBusy || deliveryReceipt?.status === 'sending'
+                || !prompt.trim() || Boolean(pendingAttachment)}>
+              {t('通过桌面发送文本', 'Send text through Desktop')}
+            </button>
+          </div>}
           <small>{steeringAvailable
             ? t('运行中可继续追加文字指令', 'You can steer this run with another text instruction')
-            : t('Ctrl/⌘+V 粘贴图片 · Ctrl/⌘+Enter 发送', 'Ctrl/⌘+V to paste an image · Ctrl/⌘+Enter to send')}</small>
+            : legacyAppServerBusy ? t('请等电脑上的任务结束后再发送。', 'Wait for the task on your computer to finish before sending.')
+              : t('Ctrl/⌘+V 粘贴图片 · Ctrl/⌘+Enter 发送', 'Ctrl/⌘+V to paste an image · Ctrl/⌘+Enter to send')}</small>
         </footer>}
       </section>
     </main>

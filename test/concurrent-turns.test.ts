@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CodexAppServer } from '../src/connector/codex-app-server.js';
+import { ManagedSessions } from '../src/connector/managed-sessions.js';
 import { mergeDesktopSessionStatuses } from '../src/connector/codex-desktop.js';
 import { canSteerOwnedTurn, canStopOwnedTurn } from '../web/src/app-utils.js';
 import { initialConversationExecution, patchConversationExecution, resetConversationExecutionPresentation } from '../web/src/conversation-execution.js';
 import { restoreOwnedTurn } from '../web/src/owned-turn.js';
 
-function fixture(desktop = false) {
-  const codex = new CodexAppServer({ runtimeCwd: process.cwd(), releaseRuntimeAfterTurn: desktop });
+function fixture(desktop = false, managedSessions?: Pick<ManagedSessions, 'has' | 'add'>) {
+  const codex = new CodexAppServer({ runtimeCwd: process.cwd(), releaseRuntimeAfterTurn: desktop, managedSessions });
   codex.ensureStarted = async () => {};
   const calls: Array<{ method: string; params: any }> = [];
   const events: any[] = [];
@@ -47,6 +48,34 @@ test('different existing and new sessions start concurrently; a duplicate sessio
     assert.equal(codex.getActiveTurn(id)?.state, 'running');
   }
   assert.equal(codex.getActiveTurn(), null, 'an unspecified target must be ambiguous');
+});
+
+test('only server-created sessions are registered and a released session can resume for a second turn', async () => {
+  const sessions = new ManagedSessions();
+  const { codex, calls, start, notification } = fixture(true, sessions);
+  await start('existing');
+  assert.equal(codex.ownsManagedSession('existing'), false);
+  const complete = (threadId: string) => notification(threadId, 'turn/completed', {
+    turn: { id: codex.getActiveTurn(threadId)?.turnId, status: 'completed' },
+  });
+  complete('existing');
+  const { threadId } = await codex.startTurn({ cwd: process.cwd(), text: 'first' });
+  assert.equal(codex.ownsManagedSession(threadId), true);
+  complete(threadId);
+  await codex.startTurn({ threadId, text: 'second' });
+  assert.deepEqual(calls.filter(c => c.method === 'thread/start' || c.params?.threadId === threadId).map(c => c.method), [
+    'thread/start', 'turn/start', 'thread/unsubscribe', 'thread/read', 'thread/resume', 'turn/start',
+  ]);
+});
+
+test('a session registry failure stops creation before sending the first user message', async () => {
+  const { codex, calls } = fixture(true, {
+    has: () => false,
+    add: () => { throw new Error('managed_sessions_persist_failed'); },
+  });
+  await assert.rejects(codex.startTurn({ cwd: process.cwd(), text: 'keep this draft' }), /managed_sessions_persist_failed/);
+  assert.deepEqual(calls.map(c => c.method), ['thread/start', 'thread/unsubscribe']);
+  assert.equal(codex.activeTurns.size, 0);
 });
 
 test('interleaved native events and answers retain each thread, turn and browser destination', async () => {

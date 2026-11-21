@@ -55,6 +55,42 @@ test('bridge request manager owns request acknowledgement, replay, and cleanup',
   assert.equal(manager.size, 0);
 });
 
+test('desktop tool sends become unconfirmed without replaying, even before a transport acknowledgement', async () => {
+  const sent: string[] = [];
+  let sequence = 0;
+  const manager = new BridgeRequestManager({
+    isConnected: () => true,
+    createId: () => String(++sequence),
+    send: (frame) => { sent.push(frame.requestId); return true; },
+  });
+  const payload = { threadId: 'chat', text: 'hello', delivery: 'desktop_tool' };
+  const beforeAcknowledgement = assert.rejects(manager.request('turn.start', payload), /^Error: desktop_delivery_unknown$/);
+  const afterAcknowledgement = assert.rejects(manager.request('turn.start', payload), /^Error: desktop_delivery_unknown$/);
+  const ordinary = manager.request('turn.start', { threadId: 'chat', text: 'native' });
+  manager.handle({ type: 'ack', requestId: '2' });
+  assert.equal(manager.replay(), 1);
+  assert.deepEqual(sent, ['1', '2', '3', '3']);
+  await Promise.all([beforeAcknowledgement, afterAcknowledgement]);
+  manager.handle({ type: 'response', requestId: '3', ok: true, data: {} });
+  await ordinary;
+  assert.equal(manager.size, 0);
+});
+
+test('desktop tool sends report interrupted and expired deliveries as unconfirmed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const payload = { threadId: 'chat', text: 'hello', delivery: 'desktop_tool' };
+  const manager = new BridgeRequestManager({ isConnected: () => true, createId: () => 'tool', send: () => true });
+  const disconnected = assert.rejects(manager.request('turn.start', payload), /^Error: desktop_delivery_unknown$/);
+  manager.interrupt();
+  await disconnected;
+  assert.equal(manager.size, 0);
+
+  const expired = assert.rejects(manager.request('turn.start', payload, { timeoutMs: 1500 }), /^Error: desktop_delivery_unknown$/);
+  t.mock.timers.tick(1500);
+  await expired;
+  assert.equal(manager.size, 0);
+});
+
 test('bridge request manager rejects failed, aborted, and disconnected requests without leaks', async () => {
   let connected = true;
   let sequence = 0;

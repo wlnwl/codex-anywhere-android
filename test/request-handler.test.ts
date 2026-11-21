@@ -68,6 +68,226 @@ function request(action, payload = {}) {
   return { action, payload, requestId: 'request-1', clientId: 'client-1' };
 }
 
+test('explicit Desktop text delivery accepts only text for an existing Desktop thread', async () => {
+  const calls: any[] = [];
+  const deps = createDependencies({
+    codex: { startTurn: async () => assert.fail(), prepareDesktopTurn: async () => { calls.push('prepared'); } },
+    desktop: {
+      sendMessage: async () => assert.fail(),
+      sendTextViaAppTool: async (input) => {
+        calls.push(input);
+        return { threadId: input.threadId, delivery: 'desktop' };
+      },
+    },
+  });
+  const draft = { threadId: 'fixture', text: 'draft', delivery: 'desktop_tool' };
+  const handle = createRequestHandler(deps);
+  assert.equal((await handle(request('turn.start', { ...draft, image: {} }))).error, 'desktop_text_delivery_text_only');
+  assert.equal((await handle(request('turn.start', { ...draft, threadId: '' }))).error, 'desktop_text_delivery_unavailable');
+  assert.equal((await createRequestHandler({ ...deps, mode: 'headless' })(request('turn.start', draft))).error, 'desktop_text_delivery_unavailable');
+  assert.deepEqual(calls, []);
+  assert.deepEqual((await handle(request('turn.start', draft))).data, { threadId: 'fixture', delivery: 'desktop' });
+  assert.deepEqual(calls, ['prepared', { threadId: 'fixture', text: 'draft' }]);
+});
+
+test('a connector-created Windows session keeps using app-server after the first turn', async () => {
+  const managed = new Set<string>();
+  const activeTurns = new Map<string, { threadId: string; turnId: string; state: string }>();
+  const calls: unknown[] = [];
+  const deps = createDependencies({
+    mode: 'desktop',
+    codex: {
+      activeTurns,
+      ownsManagedSession: (threadId: string) => managed.has(threadId),
+      startTurn: async ({ threadId, text }) => {
+        calls.push(['start', threadId, text]);
+        if (!threadId) managed.add('connector-thread');
+        return { threadId: threadId || 'connector-thread' };
+      },
+      steerTurn: async ({ threadId, text }) => {
+        calls.push(['steer', threadId, text]);
+        return { threadId, turnId: 'turn-2', steered: true };
+      },
+    },
+    desktop: {
+      sendMessage: async () => assert.fail('a connector-managed session must not use the Desktop writer'),
+    },
+  });
+
+  const first = await createRequestHandler(deps)(request('turn.start', { cwd: '.', text: 'first' }));
+  assert.equal(first.ok, true, first.error);
+  assert.deepEqual(first.data, { threadId: 'connector-thread', delivery: 'appServer', executionRoute: 'appServer' });
+
+  // No active turn or browser-local route survives into the next send.
+  const reconnected = createRequestHandler(deps);
+  const second = await reconnected(request('turn.start', { threadId: first.data.threadId, text: 'follow-up' }));
+  assert.equal(second.ok, true, second.error);
+  assert.deepEqual(second.data, { threadId: 'connector-thread', delivery: 'appServer', executionRoute: 'appServer' });
+
+  activeTurns.set('connector-thread', { threadId: 'connector-thread', turnId: 'turn-2', state: 'running' });
+  const steer = await reconnected(request('turn.start', { threadId: first.data.threadId, text: 'steer' }));
+  assert.equal(steer.ok, true, steer.error);
+  assert.deepEqual(steer.data, { threadId: 'connector-thread', turnId: 'turn-2', steered: true, delivery: 'appServer', executionRoute: 'appServer' });
+  assert.deepEqual(calls, [
+    ['start', undefined, 'first'],
+    ['start', 'connector-thread', 'follow-up'],
+    ['steer', 'connector-thread', 'steer'],
+  ]);
+});
+
+test('a client route hint never grants app-server ownership of an existing Desktop session', async () => {
+  const desktopTargets: string[] = [];
+  const handle = createRequestHandler(createDependencies({
+    codex: {
+      ownsManagedSession: (threadId: string) => threadId === 'connector-thread',
+      startTurn: async () => assert.fail('the connector must not take over a Desktop session'),
+      steerTurn: async () => assert.fail('the connector must not steer a Desktop turn'),
+    },
+    desktop: {
+      sendMessage: async ({ threadId }) => {
+        desktopTargets.push(threadId);
+        return { threadId, delivery: 'desktop' };
+      },
+    },
+  }));
+  const result = await handle(request('turn.start', {
+    threadId: 'desktop-thread', text: 'continue', delivery: 'appServer',
+  }));
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(result.data, { threadId: 'desktop-thread', delivery: 'desktop' });
+  assert.deepEqual(desktopTargets, ['desktop-thread']);
+});
+
+function legacyDeliveryFixture(options: {
+  nativeMissing?: boolean;
+  stateError?: string;
+  adoptionError?: string;
+  desktopError?: string;
+  advertised?: boolean;
+  readTool?: boolean;
+} = {}) {
+  const calls: unknown[][] = [];
+  const managed = new Set<string>();
+  const deps = createDependencies({
+    codex: {
+      ownsManagedSession: (id: string) => managed.has(id),
+      listSessions: async () => [{ id: 'legacy-thread' }, { id: 'other-thread' }],
+      readSession: async (id: string) => ({ id }),
+      startTurn: async ({ threadId, text }) => {
+        calls.push(['managed-send', threadId, text]);
+        return { threadId };
+      },
+      startLegacyTurn: async ({ threadId, text }, verify: () => Promise<void>) => {
+        await verify();
+        if (options.adoptionError) throw new Error(options.adoptionError);
+        calls.push(['adopt-send', threadId, text]);
+        managed.add(threadId);
+        return { threadId };
+      },
+    },
+    desktop: {
+      nativeInputMissing: async () => options.nativeMissing !== false,
+      assertLegacySessionIdle: async (id: string) => {
+        calls.push(['confirm-idle', id]);
+        if (options.stateError) throw new Error(options.stateError);
+      },
+      getCapabilities: async () => ({
+        available: true,
+        tools: options.readTool === false ? ['send_message_to_thread'] : ['read_thread', 'send_message_to_thread'],
+        inputAvailable: options.nativeMissing === false,
+        inputMissing: options.advertised ?? options.nativeMissing !== false,
+      }),
+      sendMessage: async ({ threadId, text }) => {
+        calls.push(['desktop-send', threadId, text]);
+        if (options.desktopError) throw new Error(options.desktopError);
+        return { threadId, delivery: 'desktop' };
+      },
+      sendTextViaAppTool: async ({ threadId, text }) => {
+        calls.push(['desktop-text-send', threadId, text]);
+        return { threadId, delivery: 'desktop' };
+      },
+    },
+    attachments: { nativeInput: async () => assert.fail('legacy app-server delivery must not resolve Desktop input') },
+  });
+  return { deps, calls, managed, handle: createRequestHandler(deps) };
+}
+
+test('ordinary send keeps the uploaded-file text and adopts only the targeted idle Windows session', async () => {
+  const { deps, calls, managed, handle } = legacyDeliveryFixture();
+  const text = '# Files mentioned by the user:\n\n## sample.txt: C:/uploads/sample.txt\n\n## My request:\nRead this.';
+  const result = await handle(request('turn.start', { threadId: 'legacy-thread', text }));
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(result.data, {
+    threadId: 'legacy-thread', delivery: 'appServer', executionRoute: 'appServer',
+  });
+  assert.deepEqual(calls, [
+    ['confirm-idle', 'legacy-thread'], ['adopt-send', 'legacy-thread', text],
+  ]);
+  assert.deepEqual([...managed], ['legacy-thread']);
+  const next = createRequestHandler(deps);
+  const listing = await next(request('sessions.list'));
+  assert.deepEqual(listing.data.sessions.map(session => [session.id, session.executionRoute]), [
+    ['legacy-thread', 'appServer'], ['other-thread', undefined],
+  ]);
+  const selected = await next(request('session.read', { threadId: 'legacy-thread' }));
+  assert.equal(selected.data.executionRoute, 'appServer');
+  const followUp = await next(request('turn.start', { threadId: 'legacy-thread', text: 'Continue' }));
+  assert.equal(followUp.ok, true, followUp.error);
+  assert.deepEqual(calls.slice(2), [['managed-send', 'legacy-thread', 'Continue']]);
+});
+
+for (const error of ['legacy_session_busy', 'legacy_session_state_unavailable']) {
+  test(`ordinary send keeps the draft unsent when Desktop adoption is blocked: ${error}`, async () => {
+    const { calls, managed, handle } = legacyDeliveryFixture({ stateError: error });
+    const result = await handle(request('turn.start', {
+      threadId: 'legacy-thread', text: 'Draft', delivery: 'appServer',
+    }));
+    assert.equal(result.ok, false);
+    assert.equal(result.error, error);
+    assert.deepEqual(calls, [['confirm-idle', 'legacy-thread']]);
+    assert.equal(managed.size, 0);
+  });
+}
+
+test('a legacy writer conflict never falls back to another sender', async () => {
+  const { calls, managed, handle } = legacyDeliveryFixture({ adoptionError: 'thread_active_writer_conflict' });
+  const result = await handle(request('turn.start', { threadId: 'legacy-thread', text: 'Draft' }));
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'thread_active_writer_conflict');
+  assert.deepEqual(calls, [['confirm-idle', 'legacy-thread']]);
+  assert.equal(managed.size, 0);
+});
+
+test('normal Desktop delivery is preserved when native input is present, including an unconfirmed delivery', async () => {
+  const { calls, managed, handle } = legacyDeliveryFixture({
+    nativeMissing: false, desktopError: 'desktop_delivery_unknown',
+  });
+  const result = await handle(request('turn.start', { threadId: 'legacy-thread', text: 'Draft' }));
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'desktop_delivery_unknown');
+  assert.deepEqual(calls, [['desktop-send', 'legacy-thread', 'Draft']]);
+  assert.equal(managed.size, 0);
+});
+
+test('an adoption attempt never discards a Desktop-only image payload', async () => {
+  const { calls, handle } = legacyDeliveryFixture();
+  const result = await handle(request('turn.start', {
+    threadId: 'legacy-thread', text: 'Read this', image: { path: 'C:/uploads/sample.png' },
+  }));
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'desktop_image_unsupported');
+  assert.deepEqual(calls, []);
+});
+
+test('legacy app-server capability requires an explicitly missing native pipe and a Desktop status reader', async () => {
+  for (const options of [{}, { nativeMissing: false }, { advertised: false }, { readTool: false }]) {
+    const { handle } = legacyDeliveryFixture(options);
+    const result = await handle(request('connector.status'));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(Boolean(result.data.capabilities.legacySessionAppServer), Object.keys(options).length === 0);
+  }
+});
+
 test('account actions require authenticated device identity and use the selected connector service', async () => {
   const calls: any[] = [];
   const handler = createRequestHandler({ ...createDependencies(), accounts: {

@@ -72,12 +72,13 @@ export class DesktopInputPipe extends EventEmitter {
       this.socket = socket;
       const timer = setTimeout(() => fail(new Error('desktop input connect timeout')), timeoutMs);
       timer.unref?.();
-      const fail = (error: Error) => {
+      const fail = (error: NodeJS.ErrnoException) => {
         clearTimeout(timer);
         this.cancelConnect = null;
         socket.off('connect', connected);
         this.disconnect(socket, error);
-        reject(new NativeRequestError(error.message, false));
+        reject(new NativeRequestError(error.message, false,
+          error.code === 'ENOENT' ? 'desktop_input_pipe_missing' : undefined));
       };
       const connected = () => {
         clearTimeout(timer);
@@ -101,7 +102,7 @@ export class DesktopInputPipe extends EventEmitter {
       if (this.socket === connectingSocket) this.disconnect(connectingSocket, error);
       if (this.ready === connection) this.ready = null;
       // Initialization cannot have delivered a user message.
-      throw new NativeRequestError(error.message, false);
+      throw new NativeRequestError(error.message, false, error.code);
     });
     this.ready = connection;
     return connection;

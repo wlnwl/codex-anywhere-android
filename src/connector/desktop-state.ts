@@ -147,6 +147,9 @@ export class DesktopState extends EventEmitter {
       if (change.type === 'snapshot' || change.patches.some((patch: ObjectValue) => !isItemPatch(patch.path))) {
         this.emit('changed', id, entry.state, entry.owner);
       }
+      if (change.type === 'snapshot' || change.patches.some((patch: ObjectValue) => isNotificationPatch(patch.path, entry.state!))) {
+        this.emit('notification-state', id, entry.state, entry.owner);
+      }
     } catch { this.invalidate(id, entry); }
   }
   private invalidate(id: string, entry: Entry) {
@@ -166,4 +169,16 @@ function isItemPatch(path: Array<string | number>) {
   return (path[0] === 'turns' && typeof path[1] === 'number' && path[2] === 'items')
     || (path[0] === 'turnHistory' && path[1] === 'history' && path[2] === 'entitiesByKey'
       && typeof path[3] === 'string' && path[4] === 'items');
+}
+
+function isNotificationPatch(path: Array<string | number>, state: ObjectValue) {
+  if (!isItemPatch(path)) return true;
+  const legacy = path[0] === 'turns';
+  const field = path[legacy ? 4 : 6];
+  if (field === 'text') {
+    const item = legacy ? state.turns?.[path[1]]?.items?.[path[3]]
+      : state.turnHistory?.history?.entitiesByKey?.[path[3]]?.items?.[path[5]];
+    return item?.type === 'agentMessage' && item.delivery === 'async' && !item.questions?.length;
+  }
+  return field === undefined || field === 'id' || field === 'delivery' || field === 'questions' || field === 'type';
 }

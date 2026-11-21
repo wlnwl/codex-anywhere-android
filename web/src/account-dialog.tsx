@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { BridgeRequest } from './bridge-request-manager';
+import { AccountQuota, type QuotaState, type RateLimits } from './account-quota';
 import { t } from './i18n';
 import './account-dialog.css';
 
@@ -109,6 +110,7 @@ export function AccountDialog({ deviceLabel, request, onClose }: {
   const lifetime = useRef<AbortController | null>(null);
   const operation = useRef<AbortController | null>(null);
   const [accounts, setAccounts] = useState<AccountList | null>(null);
+  const [quota, setQuota] = useState<QuotaState>({ status: 'loading' });
   const [restartState, setRestartState] = useState<RestartState | null>(null);
   const [login, setLogin] = useState<LoginPrompt | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -119,13 +121,28 @@ export function AccountDialog({ deviceLabel, request, onClose }: {
   const restartPending = restart?.status === 'pending' || restart?.status === 'restarting';
   const restartMessage = restartLabel(restartState);
 
-  const refresh = useCallback(async (signal: AbortSignal) => {
-    const result = await request<AccountList>('account.sessions.list', { refreshWorkspaceMetadata: true }, { signal });
-    if (signal.aborted) return;
-    if (!Array.isArray(result?.sessions)) throw new Error('account_response_invalid');
-    setAccounts(result);
-    setRestartState(result);
+  const refreshQuota = useCallback(async (signal: AbortSignal) => {
+    setQuota({ status: 'loading' });
+    try {
+      const limits = await request<RateLimits>('account.rateLimits.read', {}, { signal, timeoutMs: 15_000 });
+      if (!signal.aborted) setQuota({ status: 'ready', limits });
+    } catch {
+      if (!signal.aborted) setQuota({ status: 'unavailable' });
+    }
   }, [request]);
+
+  const refresh = useCallback(async (signal: AbortSignal) => {
+    const quotaRefresh = refreshQuota(signal);
+    try {
+      const result = await request<AccountList>('account.sessions.list', { refreshWorkspaceMetadata: true }, { signal });
+      if (signal.aborted) return;
+      if (!Array.isArray(result?.sessions)) throw new Error('account_response_invalid');
+      setAccounts(result);
+      setRestartState(result);
+    } finally {
+      await quotaRefresh;
+    }
+  }, [refreshQuota, request]);
 
   const run = useCallback(async (action: (signal: AbortSignal) => Promise<void>) => {
     const controller = lifetime.current;
@@ -208,6 +225,7 @@ export function AccountDialog({ deviceLabel, request, onClose }: {
           if (!signal.aborted && !operation.current) {
             setError('');
             setRestartState(result);
+            if (result.restart?.status === 'completed') void run(refresh);
           }
         }
       } catch (cause) {
@@ -245,8 +263,12 @@ export function AccountDialog({ deviceLabel, request, onClose }: {
     void run(async signal => {
       if (choice.kind === 'restart') {
         const result = await request<RestartState>('account.desktop.restart', { confirm: true }, { signal });
-        if (!signal.aborted) setRestartState(result);
+        if (!signal.aborted) {
+          setRestartState(result);
+          if (result.restart?.status === 'completed') await refresh(signal);
+        }
       } else {
+        setQuota({ status: 'unavailable' });
         const result = await request<AccountList>('account.sessions.switch', {
           sessionId: choice.sessionId, accountId: choice.accountId,
         }, { signal });
@@ -254,6 +276,7 @@ export function AccountDialog({ deviceLabel, request, onClose }: {
         setAccounts(result);
         setRestartState(result);
         setNotice(t('已保存账号选择。', 'Account selection saved.'));
+        await refreshQuota(signal);
       }
       if (!signal.aborted) setConfirmation(null);
     });
@@ -324,6 +347,7 @@ export function AccountDialog({ deviceLabel, request, onClose }: {
               {accounts?.activeAccount?.planType && <p className="account-dialog-plan">
                 {t('当前订阅', 'Current plan')} · {planLabel(accounts.activeAccount.planType)}
               </p>}
+              <AccountQuota state={quota} />
               {accounts && accounts.sessions.length === 0 && <p>{t('这台电脑没有已登录的 Codex 账号。', 'No Codex accounts are signed in on this computer.')}</p>}
               {!accounts && busy && <p role="status">{t('正在读取账号和工作区…', 'Loading accounts and workspaces…')}</p>}
               {accounts?.sessions.map(session => {

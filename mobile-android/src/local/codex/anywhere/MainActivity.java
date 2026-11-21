@@ -7,14 +7,20 @@ public class MainActivity extends Activity {
  final Map<String,Integer> requestGenerations=new HashMap<>();
  final Map<String,String> requestDevices=new HashMap<>();
  List<ConversationHistory.Message> historyMessages=new ArrayList<>();
- ScrollView historyScroll;Button sendButton;
+ ScrollView historyScroll;Button sendButton,desktopTextButton;
  String historyRequestId="",historySignature="",conversationTitle="",streamText="",streamTurnId="";
  boolean foreground=true,historyLoaded=false,historyDirty=false,selectingDevice=false,forceHistoryBottom=false;
  boolean relayAuthenticated=false;
  Dialog deviceSheet;
  AccountUi accounts;
+ TaskNotifications notifications;
+ TaskNotifications.Target notificationTarget;
+ TextView approvalStatus;
+ String lastPresenceDevice="", lastPresenceRelay="", approvalStatusRequest="";
+ boolean lastPresenceOnline=false;
  private static final long HISTORY_SYNC_INTERVAL_MS=1_000;
  private static final long HISTORY_RETRY_INTERVAL_MS=15_000;
+ private static final String DESKTOP_INPUT_PIPE_MISSING="desktop_input_pipe_missing";
  long historyReadStartedAt=0,historyPollAt=0;
  final Runnable historyPoll=()->{historyPollAt=0;readHistory(false);};
  JSONObject permissionConfig;Map<String,String> requestThreads=new HashMap<>();JSONArray sessionCatalog=new JSONArray();Dialog sessionDrawer;LinearLayout sessionRows;Button deviceButton;String scannedPair="";DialogUi popupUi;DialogUi.Sheet connectionDialog;String selectedDeviceId="", connectionServerDraft="", connectionPairDraft="";String pendingPairCredential=null;boolean connectionBusy=false, engineLoaded=false, connectAfterLoad=true;Runnable completeConnection;int connectionAttempt=0;WebView engine; LinearLayout root,body;TextView status;EditText draft;String server,thread="";boolean ready=false;int generation=0;long lastRefresh=0;Map<String,String> pending=new HashMap<>();android.content.SharedPreferences prefs;
@@ -25,11 +31,13 @@ public class MainActivity extends Activity {
 
  @Override public void onCreate(Bundle b) {
    super.onCreate(b);
+   notifications=new TaskNotifications(this);
+   notificationTarget=notifications.readTarget(getIntent());
    palette = AppPalette.read(this);
    popupUi = new DialogUi(this, palette);
    accounts = new AccountUi(this, popupUi, (action, payload) -> {
      if (!ready) throw new IllegalStateException("computer_not_connected");
-     call(action, payload);
+     return call(action, payload);
    });
    prefs = getPreferences(0);
    selectedDeviceId = prefs.getString("selectedDevice", "");
@@ -77,6 +85,7 @@ public class MainActivity extends Activity {
      else notice("请先连接电脑");
    });
    addTool(mainTools, "刷新", this::refresh);
+   addTool(mainTools, "通知", this::notificationSettings);
    addTool(mainTools, "停止", () -> {
      if (!thread.isEmpty()) {
        try { call("turn.stop", new JSONObject().put("threadId", thread)); }
@@ -85,6 +94,11 @@ public class MainActivity extends Activity {
    });
    mainTools.setPadding(0, dp(12), 0, dp(12));
    root.addView(mainTools);
+
+   approvalStatus=text("",13);
+   approvalStatus.setPadding(dp(8),0,dp(8),dp(8));
+   approvalStatus.setVisibility(View.GONE);
+   root.addView(approvalStatus);
 
    historyScroll = new ScrollView(this);
    body = new LinearLayout(this);
@@ -101,6 +115,14 @@ public class MainActivity extends Activity {
    root.addView(draft);
    sendButton = button("发送指令  ↗", this::submit);
    root.addView(sendButton, new LinearLayout.LayoutParams(-1, dp(56)));
+   desktopTextButton = button("通过桌面发送文本", () -> submit(true));
+   desktopTextButton.setVisibility(View.GONE);
+   root.addView(desktopTextButton, new LinearLayout.LayoutParams(-1, dp(48)));
+   draft.addTextChangedListener(new android.text.TextWatcher() {
+     public void beforeTextChanged(CharSequence text,int start,int count,int after) {}
+     public void onTextChanged(CharSequence text,int start,int before,int count) { updateDesktopTextButton(); }
+     public void afterTextChanged(android.text.Editable text) {}
+   });
    body.addView(text("随时继续你的工作", 25));
    body.addView(text("连接电脑，查看会话与跟进任务", 14));
    applyPalette(palette);
@@ -161,6 +183,7 @@ public class MainActivity extends Activity {
    colorHistory(appTitle);
    status.setTextColor(choice.muted);
    status.setBackground(surface(choice.statusSurface, 14));
+   approvalStatus.setTextColor(choice.accent);
    styleButton(deviceButton);
    styleButton(connectionButton);
    for (int i = 0; i < mainTools.getChildCount(); i++) {
@@ -178,6 +201,7 @@ public class MainActivity extends Activity {
    }
    sendButton.setBackground(surface(choice.accent, 16));
    sendButton.setTextColor(choice.onAccent);
+   styleButton(desktopTextButton);
    colorHistory(body);
  }
 
@@ -223,17 +247,38 @@ public class MainActivity extends Activity {
        inventory=e.optJSONArray("devices");
        relayAuthenticated=e.optBoolean("relayAuthenticated",relayAuthenticated);
        if(!relayAuthenticated){dismissDeviceSheet();return;}
+       if(e.optBoolean("inventoryComplete")&&inventory!=null&&isCurrentRelay(e)) {
+         java.util.Set<String> authorized=new java.util.HashSet<>();
+         for(int i=0;i<inventory.length();i++){
+           JSONObject item=inventory.optJSONObject(i);
+           if(item!=null&&!item.optString("id").isEmpty())authorized.add(item.optString("id"));
+         }
+         notifications.retainAuthorizedDevices(e.optString("relayOrigin"),authorized);
+         if(notificationTarget!=null&&!authorized.contains(notificationTarget.device))notificationTarget=null;
+         String origin=e.optString("relayOrigin");
+         if(!selectedDeviceId.isEmpty()&&authorized.contains(selectedDeviceId)){
+           boolean online=deviceIsOnline(selectedDeviceId);
+           if(origin.equals(lastPresenceRelay)&&selectedDeviceId.equals(lastPresenceDevice)&&lastPresenceOnline&&!online)
+             notifications.publish(origin,selectedDeviceId,"",UUID.randomUUID().toString(),"offline");
+           lastPresenceRelay=origin;lastPresenceDevice=selectedDeviceId;lastPresenceOnline=online;
+         }else lastPresenceOnline=false;
+       }
+       if(tryNotificationTarget())return;
        if(!ready&&!selectingDevice&&e.optString("selectedDeviceId").isEmpty())restoreDevice();
        return;
      }
      if(type.equals("ready")) {
        if(!relayAuthenticated||!selectedDeviceId.equals(e.optString("deviceId")))return;
        ready=true;selectingDevice=false;historyRequestId="";
+       updateDesktopTextButton();
        notice("已连接，正在同步会话…");call("sessions.list",new JSONObject());
+       if(tryNotificationTarget())return;
+       updateNotificationWatch();
        if(!thread.isEmpty())readHistory(!historyLoaded);return;
      }
      if(type.equals("disconnected")||type.equals("error")) {
        if("relay".equals(e.optString("scope"))) {
+         if(e.optInt("code")==4403&&isCurrentRelay(e)){notifications.clear();notificationTarget=null;}
          invalidateRelay();
          android.util.Log.i("CodexSync","relay unavailable code="+e.optInt("code")+" retrying="+e.optBoolean("retrying"));
        } else invalidateDeviceConnection();
@@ -248,12 +293,22 @@ public class MainActivity extends Activity {
      JSONObject frame=e.getJSONObject("frame");String frameType=frame.optString("type");
      String id=frame.optString("requestId");
      if(frameType.equals("ack")){if("turn.start".equals(pending.get(id))){sends.acknowledge(id);if(thread.equals(requestThreads.get(id))&&selectedDeviceId.equals(requestDevices.get(id)))renderConversation(false);}return;}
-     if(frameType.equals("event")){handleLiveEvent(frame);return;}
+     if(frameType.equals("event")){
+       if(isCurrentRelay(e)&&!selectedDeviceId.isEmpty()&&selectedDeviceId.equals(e.optString("deviceId"))){
+         handleNotificationEvent(e.optString("relayOrigin"),frame);
+         handleLiveEvent(frame);
+       }
+       return;
+     }
      if(!frameType.equals("response"))return;
      String action=pending.remove(id),target=requestThreads.remove(id),device=requestDevices.remove(id);
      Integer requestGeneration=requestGenerations.remove(id);
      if(action==null)return;
      android.util.Log.i("CodexSync","response "+action+" ok="+frame.optBoolean("ok"));
+     if(action.equals(AccountUi.QUOTA_ACTION)) {
+       if(selectedDeviceId.equals(device)) accounts.handleQuotaResponse(id,frame.optBoolean("ok"),frame.optJSONObject("data"));
+       return;
+     }
      if(action.startsWith("account.")) {
        if(selectedDeviceId.equals(device)) {
          accounts.handleResponse(action,frame.optBoolean("ok"),frame.optJSONObject("data"),frame.optString("error"));
@@ -265,10 +320,18 @@ public class MainActivity extends Activity {
        return;
      }
      if(action.equals("turn.start")) {
-       if(frame.optBoolean("ok"))sends.succeed(id);else {String error=frame.optString("error","电脑未接受指令");if(error.contains("timeout")||error.contains("uncertain")||error.contains("unconfirmed"))sends.uncertain(id,error);else sends.fail(id,error);}
+       String error=frame.optString("error","电脑未接受指令");
+       boolean ok=frame.optBoolean("ok");
+       if(ok)sends.succeed(id);
+       else if("desktop_delivery_unknown".equals(error)||error.contains("timeout")||error.contains("uncertain")||error.contains("unconfirmed"))sends.uncertain(id,error);
+       else sends.fail(id,error);
+       if(!ok&&(DESKTOP_INPUT_PIPE_MISSING.equals(error)||"desktop_input_available".equals(error)
+           ||"desktop_text_delivery_unavailable".equals(error)||error.startsWith("desktop_tool_unavailable:"))) {
+         restoreRejectedDraft(device,target,id);
+       }
        if(selectedDeviceId.equals(device)&&thread.equals(target)) {
          renderConversation(false);
-         notice(frame.optBoolean("ok")?"指令已送达，正在同步回复…":"发送失败："+frame.optString("error"));
+         notice(ok?"指令已送达，正在同步回复…":sendError(error));
          scheduleHistory(150);
        }
        return;
@@ -276,7 +339,16 @@ public class MainActivity extends Activity {
      boolean historyRead=action.equals("session.read");
      if(historyRead&&id.equals(historyRequestId))historyRequestId="";
      if(!selectedDeviceId.equals(device)||requestGeneration==null||requestGeneration!=generation)return;
-     if((historyRead||action.startsWith("session.permissions."))&&!thread.equals(target))return;
+     if((historyRead||action.startsWith("session.permissions.")||action.equals("approval.pending"))&&!thread.equals(target))return;
+     if(action.equals("approval.pending")) {
+       JSONObject state=frame.optJSONObject("data");
+       if(id.equals(approvalStatusRequest)&&frame.optBoolean("ok")&&state!=null&&!state.optBoolean("desktopStatusUnavailable")){
+         JSONArray approvals=state.optJSONArray("approvals");
+         boolean waiting=state.optJSONObject("externalApproval")!=null||(approvals!=null&&approvals.length()>0);
+         showApprovalStatus(waiting);
+       }
+       return;
+     }
      if(!frame.optBoolean("ok")) {
        String error=frame.optString("error","请求失败");
        if(historyRead){if(!historyLoaded)showHistoryPlaceholder("会话暂未加载",friendlyError(error));scheduleHistory(HISTORY_RETRY_INTERVAL_MS);}
@@ -302,6 +374,7 @@ public class MainActivity extends Activity {
        if(trailing)scheduleHistory(200);else scheduleNextHistory();
      } else if(action.equals("sessions.list")&&data instanceof JSONObject) {
        showSessions(((JSONObject)data).optJSONArray("sessions"));
+       updateNotificationWatch(true);
      } else if(action.equals("session.permissions.read")&&data instanceof JSONObject) {
        permissionConfig=(JSONObject)data;showPermissions();
      } else if(action.equals("session.permissions.update")&&data instanceof JSONObject) {
@@ -331,6 +404,10 @@ public class MainActivity extends Activity {
  void failRequest(String id,String message,boolean uncertain) {
    String action=pending.remove(id),target=requestThreads.remove(id),device=requestDevices.remove(id);
    requestGenerations.remove(id);if(action==null)return;
+   if(action.equals(AccountUi.QUOTA_ACTION)) {
+     if(selectedDeviceId.equals(device)) accounts.handleQuotaResponse(id,false,null);
+     return;
+   }
    if(action.startsWith("account.")) {
      if(selectedDeviceId.equals(device))accounts.handleResponse(action,false,null,"账号操作未确认，请刷新账号状态。");
      return;
@@ -360,10 +437,12 @@ public class MainActivity extends Activity {
  }
 
  void invalidateDeviceConnection() {
+   showApprovalStatus(false);
    ready=false;selectingDevice=false;generation++;
    if(accounts!=null)accounts.close();
    cancelHistoryPoll();historyRequestId="";historyDirty=false;
    sends.disconnect(selectedDeviceId);pending.clear();requestThreads.clear();requestDevices.clear();requestGenerations.clear();
+   updateDesktopTextButton();
  }
 
  void invalidateRelay() {
@@ -433,18 +512,114 @@ public class MainActivity extends Activity {
    sheet.setPrimary("连接设备",()->{
      int n=selected[0];if(n<0||!online[n])return;
      if(!deviceIsOnline(ids[n])){sheet.setError(relayAuthenticated?"这台电脑暂时离线，请稍后重试。":"手机尚未连接中继，请重新连接。");return;}
-     if(ready&&ids[n].equals(selectedDeviceId)){sheet.dismiss();return;}
+     notificationTarget=null;sheet.dismiss();
+     if(!ready||!ids[n].equals(selectedDeviceId))selectComputer(ids[n],labels[n]);
+   });
+   draw[0].run();sheet.show();
+ }
+
+ void selectComputer(String id,String label) {
+     showApprovalStatus(false);
      prefs.edit().putString(draftKey(),draft.getText().toString()).apply();
      accounts.close();sends.disconnect(selectedDeviceId);generation++;cancelHistoryPoll();historyRequestId="";historyDirty=false;
-     selectedDeviceId=ids[n];selectingDevice=true;deviceButton.setText(labels[n]+" ▾");
-     prefs.edit().putString("selectedDevice",selectedDeviceId).putString("deviceName:"+selectedDeviceId,labels[n]).apply();
+     selectedDeviceId=id;selectingDevice=true;deviceButton.setText(label+" ▾");
+     prefs.edit().putString("selectedDevice",selectedDeviceId).putString("deviceName:"+selectedDeviceId,label).apply();
      historyMessages=new ArrayList<>();historySignature="";historyLoaded=false;streamText="";streamTurnId="";
      sessionCatalog=new JSONArray();permissionConfig=null;ready=false;thread=prefs.getString("thread:"+selectedDeviceId,"");conversationTitle=prefs.getString("title:"+selectedDeviceId,"");
      draft.setText(prefs.getString(draftKey(),""));body.removeAllViews();pending.clear();requestThreads.clear();requestDevices.clear();requestGenerations.clear();
-     notice("正在连接 "+labels[n]+"…");sheet.dismiss();
-     js("selectDevice("+JSONObject.quote(ids[n])+")");
-   });
-   draw[0].run();sheet.show();
+     notice("正在连接 "+label+"…");
+     js("selectDevice("+JSONObject.quote(id)+")");
+ }
+
+ void notificationSettings(){
+   boolean enabled=notifications.isEnabled();
+   DialogUi.Sheet sheet=popupUi.create("系统提醒","任务通知","任务完成、失败、需要你操作或电脑离线时提醒。");
+   sheet.content.addView(text(notifications.statusText(),14));
+   sheet.setSecondary("系统设置",()->{sheet.dismiss();notifications.openSystemSettings();});
+   sheet.setPrimary(enabled?"关闭通知":"开启通知",()->{notifications.setEnabled(!enabled);updateNotificationWatch();sheet.dismiss();});
+   sheet.show();
+ }
+
+ void updateNotificationWatch(){
+   updateNotificationWatch(false);
+ }
+
+ void updateNotificationWatch(boolean refresh){
+   if(!ready||!engineLoaded)return;
+   js("if (typeof watchTaskNotifications === 'function') watchTaskNotifications("+JSONObject.quote(notifications.canNotify()?thread:"")+","+refresh+")");
+ }
+
+ void showApprovalStatus(boolean waiting){
+   approvalStatus.setText(waiting?"这段会话仍有待处理请求，请到电脑或 Web 查看。":"");
+   approvalStatus.setVisibility(waiting?View.VISIBLE:View.GONE);
+ }
+
+ void refreshApprovalStatus(){
+   if(!ready||!foreground||thread.isEmpty())return;
+   try{approvalStatusRequest=call("approval.pending",new JSONObject().put("threadId",thread));}
+   catch(JSONException ignored){}
+ }
+
+ boolean isCurrentRelay(JSONObject event){
+   String origin=relayOrigin(server);
+   return !origin.isEmpty()&&origin.equals(relayOrigin(event.optString("relayOrigin")));
+ }
+
+ String relayOrigin(String address){
+   try {
+     java.net.URI uri=java.net.URI.create(address);
+     if(!"https".equalsIgnoreCase(uri.getScheme())||uri.getHost()==null||uri.getUserInfo()!=null)return "";
+     int port=uri.getPort();
+     return "https://"+uri.getHost().toLowerCase(java.util.Locale.ROOT)+(port==-1||port==443?"":":"+port);
+   }catch(IllegalArgumentException ignored){return "";}
+ }
+
+ boolean tryNotificationTarget(){
+   TaskNotifications.Target target=notificationTarget;
+   if(target==null)return false;
+   String origin=relayOrigin(server);
+   if(origin.isEmpty()||!origin.equals(relayOrigin(target.relay))){notificationTarget=null;return false;}
+   if(!relayAuthenticated)return false;
+   if(target.thread.isEmpty()&&inventory!=null&&inventory.length()>0){
+     notificationTarget=null;devices();return false;
+   }
+   if(!deviceIsOnline(target.device))return false;
+   if(!target.device.equals(selectedDeviceId)||(!ready&&!selectingDevice)) {
+     dismissDeviceSheet();selectComputer(target.device,prefs.getString("deviceName:"+target.device,"电脑"));return true;
+   }
+   if(!ready)return true;
+   notificationTarget=null;
+   if(sessionDrawer!=null&&sessionDrawer.isShowing())sessionDrawer.dismiss();
+   if(target.thread.equals(thread)){updateNotificationWatch();readHistory(true);refreshApprovalStatus();return true;}
+   JSONObject selected=null;
+   for(int i=0;i<sessionCatalog.length();i++){
+     JSONObject item=sessionCatalog.optJSONObject(i);
+     if(item!=null&&target.thread.equals(item.optString("id"))){selected=item;break;}
+   }
+   if(selected==null){selected=new JSONObject();try{selected.put("id",target.thread);selected.put("title","任务会话");}catch(JSONException ignored){return false;}}
+   openConversation(selected);refreshApprovalStatus();return true;
+ }
+
+ void handleNotificationEvent(String relay,JSONObject frame){
+   if(!ready||selectedDeviceId.isEmpty())return;
+   JSONObject payload=frame.optJSONObject("payload");if(payload==null)return;
+   String event=frame.optString("event"), target=payload.optString("threadId"), id="", kind="";
+   if(event.equals("task.notification")){id=payload.optString("eventId");kind=payload.optString("kind");}
+   else if(event.equals("turn.ended")) {String reason=payload.optString("reason"), turn=payload.optString("turnId");if(!turn.isEmpty()&&(reason.equals("completed")||reason.equals("failed"))){kind=reason;id="turn:"+turn;}}
+   else if(event.equals("approval.requested")){String key=payload.optString("approvalId");if(!key.isEmpty()){kind="approval";id="approval:"+payload.optString("turnId")+":"+key;}}
+   else if(event.equals("turn.questions")){String key=payload.optString("itemId");if(!key.isEmpty()){kind="input";id="input:"+key;}}
+   if(!target.isEmpty()&&!id.isEmpty()&&!kind.isEmpty())notifications.publish(relay,selectedDeviceId,target,id,kind);
+ }
+
+ @Override protected void onNewIntent(Intent intent){
+   super.onNewIntent(intent);setIntent(intent);
+   TaskNotifications.Target target=notifications.readTarget(intent);
+   if(target!=null){notificationTarget=target;tryNotificationTarget();}
+ }
+
+ @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){
+   super.onRequestPermissionsResult(request,permissions,results);
+   if(notifications.onPermissionResult(request,results))updateNotificationWatch();
  }
 
  void showSessions(JSONArray sessions){sessionCatalog=sessions==null?new JSONArray():sessions;if(sessionDrawer!=null&&sessionDrawer.isShowing())filterSessions("");}
@@ -506,17 +681,33 @@ public class MainActivity extends Activity {
 
 
  void openConversation(JSONObject item) {
+   showApprovalStatus(false);
    prefs.edit().putString(draftKey(),draft.getText().toString()).apply();
    generation++;thread=item.optString("id");conversationTitle=item.optString("title",item.optString("name","会话"));
    prefs.edit().putString("thread:"+selectedDeviceId,thread).putString("title:"+selectedDeviceId,conversationTitle).apply();
-   draft.setText(prefs.getString(draftKey(),""));
    historyRequestId="";historyDirty=false;historyLoaded=false;historySignature="";
+   draft.setText(prefs.getString(draftKey(),""));
    historyMessages=new ArrayList<>();streamText="";streamTurnId="";
    cancelHistoryPoll();forceHistoryBottom=true;
+   updateNotificationWatch();
    showHistoryPlaceholder("正在加载会话…","正在从电脑读取最新记录");readHistory(true);
  }
 
  String draftKey(){return "draft:"+selectedDeviceId+":"+thread;}
+
+ private void restoreRejectedDraft(String device,String target,String id) {
+   boolean current=selectedDeviceId.equals(device)&&thread.equals(target);
+   String key="draft:"+device+":"+target;
+   String existing=current?draft.getText().toString():prefs.getString(key,"");
+   if(!existing.isEmpty())return;
+   for(SendLedger.Entry entry:sends.entries(device,target)) {
+     if(entry.id.equals(id)&&SendLedger.FAILED.equals(entry.state)) {
+       prefs.edit().putString(key,entry.text).apply();
+       if(current)draft.setText(entry.text);
+       return;
+     }
+   }
+ }
 
  void refresh() {
    if(thread.isEmpty()){call("sessions.list",new JSONObject());return;}
@@ -557,6 +748,9 @@ public class MainActivity extends Activity {
    if(!target.isEmpty()&&!target.equals(thread))return;
    if(thread.isEmpty())return;
    String event=frame.optString("event");
+   if(event.equals("approval.requested")||event.equals("approval.resolved")
+      ||(event.equals("task.notification")&&payload!=null&&"approval".equals(payload.optString("kind")))
+      ||(event.equals("desktop.state")&&approvalStatus.getVisibility()==View.VISIBLE))refreshApprovalStatus();
    if(event.equals("turn.delta")&&payload!=null) {
      String turn=payload.optString("turnId");
      if(!turn.equals(streamTurnId)){streamTurnId=turn;streamText="";}
@@ -594,6 +788,7 @@ public class MainActivity extends Activity {
  }
 
  void renderConversation(boolean forceBottom) {
+   updateDesktopTextButton();
    if(thread.isEmpty())return;
    int oldY=historyScroll.getScrollY();
    boolean following=forceBottom||body.getHeight()-oldY-historyScroll.getHeight()<dp(100);
@@ -601,7 +796,7 @@ public class MainActivity extends Activity {
    for(ConversationHistory.Message row:historyMessages)addMessage(row.kind,row.text,"");
    for(SendLedger.Entry entry:sends.entries(selectedDeviceId,thread)) {
      if(entry.state.equals("confirmed"))continue;
-     String label=entry.state.equals("pending")?"发送中…":entry.state.equals("receipt")?"电脑已收到，等待确认…":entry.state.equals("accepted")?"已发送，等待记录同步":entry.state.equals("failed")?"发送失败："+entry.detail:"结果待确认，请先同步记录，勿重复发送";
+     String label=entry.state.equals("pending")?"发送中…":entry.state.equals("receipt")?"电脑已收到，等待确认…":entry.state.equals("accepted")?"已发送，等待记录同步":entry.state.equals("failed")?sendError(entry.detail):"结果待确认，请先同步记录，勿重复发送";
      addMessage("user",entry.text,label);
    }
    if(!streamText.isEmpty())addMessage("assistant",streamText,"正在回复…");
@@ -622,16 +817,43 @@ public class MainActivity extends Activity {
    LinearLayout.LayoutParams layout=new LinearLayout.LayoutParams(-1,-2);layout.setMargins(user?dp(18):0,dp(8),user?0:dp(12),dp(8));body.addView(card,layout);
  }
 
+ private static String sendError(String error) {
+   if(DESKTOP_INPUT_PIPE_MISSING.equals(error))return "桌面原生输入通道不可用，消息未发送";
+   if("desktop_input_available".equals(error))return "桌面原生输入已恢复，请使用发送指令";
+   if("desktop_text_delivery_unavailable".equals(error)||error.startsWith("desktop_tool_unavailable:"))
+     return "发送失败：桌面文本通道暂不可用";
+   if("desktop_delivery_unknown".equals(error))return "结果待确认，请先同步记录，勿重复发送";
+   return "发送失败："+error;
+ }
+
+ private boolean canSendDesktopText(String value) {
+   return ready&&historyLoaded&&!value.isEmpty()&&!hasPendingSend()
+       &&sends.canRetryRejectedText(selectedDeviceId,thread,value,DESKTOP_INPUT_PIPE_MISSING);
+ }
+
+ private void updateDesktopTextButton() {
+   String value=draft.getText().toString().trim();
+   desktopTextButton.setVisibility(canSendDesktopText(value)?View.VISIBLE:View.GONE);
+ }
+
  void submit() {
+   submit(false);
+ }
+
+ private void submit(boolean desktopTool) {
    String value=draft.getText().toString().trim();
    if(value.isEmpty()||thread.isEmpty()){notice("先选择会话并输入指令");return;}
    if(!ready){notice("电脑连接已断开，草稿已保留");return;}
    if(!historyLoaded){notice("正在读取会话，请加载完成后发送");return;}
    if(hasPendingSend()){notice("上一条指令尚未确认，请稍候");return;}
+   if(desktopTool&&!canSendDesktopText(value))return;
    try {
      Set<String> baseline=new HashSet<>();for(ConversationHistory.Message row:historyMessages)if("user".equals(row.kind))baseline.add(row.id);
-     String id=call("turn.start",new JSONObject().put("threadId",thread).put("text",value));
+     JSONObject payload=new JSONObject().put("threadId",thread).put("text",value);
+     if(desktopTool)payload.put("delivery","desktop_tool");
+     String id=call("turn.start",payload);
      if(id==null)return;
+     sends.discardRejectedText(selectedDeviceId,thread,value,DESKTOP_INPUT_PIPE_MISSING);
      sends.begin(id,selectedDeviceId,thread,value,baseline);
      draft.setText("");prefs.edit().putString(draftKey(),"").apply();
      renderConversation(true);notice("正在发送到电脑…");scheduleHistory(400);
@@ -732,6 +954,7 @@ public class MainActivity extends Activity {
      invalidateRelay();renderConversation(false);
      String normalized="https://"+uri.getAuthority()+"/";
      if(!server.equals(normalized)) {
+       notifications.clear();notificationTarget=null;
        server=normalized;prefs.edit().putString("server",server).apply();
        engineLoaded=false;connectAfterLoad=true;pendingPairCredential=credential;
        engine.loadUrl(server+"__native/engine.html");
@@ -752,7 +975,7 @@ public class MainActivity extends Activity {
    sheet.show();
  }
 
-protected void onResume(){super.onResume();foreground=true;if(accounts!=null)accounts.setForeground(true);if(engine!=null){engine.onResume();if(engineLoaded)js("setForeground(true)");}if(ready&&!thread.isEmpty())scheduleHistory(0);}
+protected void onResume(){super.onResume();foreground=true;if(accounts!=null)accounts.setForeground(true);if(engine!=null){engine.onResume();if(engineLoaded)js("setForeground(true)");}updateNotificationWatch();if(ready&&!thread.isEmpty())scheduleHistory(0);}
 protected void onPause(){foreground=false;if(accounts!=null)accounts.setForeground(false);if(engineLoaded)js("setForeground(false)");cancelHistoryPoll();if(draft!=null&&prefs!=null)prefs.edit().putString(draftKey(),draft.getText().toString()).apply();super.onPause();}
 protected void onDestroy(){if(accounts!=null)accounts.close();syncHandler.removeCallbacksAndMessages(null);dismissDeviceSheet();if(connectionDialog!=null)connectionDialog.dismiss();engine.destroy();super.onDestroy();}
 }

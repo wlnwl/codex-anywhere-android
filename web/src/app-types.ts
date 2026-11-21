@@ -12,6 +12,7 @@ export type Session = {
   updatedAt?: number | string | null;
   status?: string;
   canStartNewSession?: boolean;
+  executionRoute?: 'appServer';
 };
 export type ModelOption = {
   model: string;
@@ -41,7 +42,8 @@ export type ConnectorStatus = {
   codexOnline: boolean;
   activeTurn: boolean;
   capabilities: { networkAccess: boolean; fullAccess: boolean; fileUpload?: boolean; sessionArchive?: boolean; sessionDelete?: boolean;
-    sessionArchivePendingApproval?: boolean; sessionRestore?: boolean; desktopNativeImages?: boolean; desktopNativeState?: boolean };
+    sessionArchivePendingApproval?: boolean; sessionRestore?: boolean; desktopNativeImages?: boolean; desktopNativeState?: boolean;
+    legacySessionAppServer?: boolean };
 };
 export type SessionPermissionConfig = {
   mode: PermissionMode | 'custom';
@@ -106,7 +108,11 @@ export type HistoryPage = {
   turnProgress?: TurnProgress;
   contextUsage?: ContextUsage;
 };
-export type TurnStartResult = { threadId: string; delivery?: 'desktop' | 'appServer' };
+export type TurnStartResult = {
+  threadId: string;
+  delivery?: 'desktop' | 'appServer';
+  executionRoute?: Session['executionRoute'];
+};
 export type PendingAttachment = { file: File; kind: 'image' | 'file'; transferPreview?: File; previewUrl: string };
 export type DownloadedImage = { path: string; mimeType: string; size: number; data: string };
 export type VisualizationDocument = { name: string; size: number; content?: string };

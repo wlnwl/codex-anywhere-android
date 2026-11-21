@@ -83,10 +83,16 @@ export class ConnectorSecureChannels {
     return false;
   }
 
-  sendEvent(frame: JsonObject) {
+  hasChannel(clientId: string, channelId: string) {
+    const state = this.channels.get(clientId);
+    return Boolean(state?.confirmed && state.acceptance.transcript.channelId === channelId);
+  }
+
+  sendEvent(frame: JsonObject, channelId?: string) {
     const clientId = String(frame.clientId || '');
     const state = this.channels.get(clientId);
     if (!state) return false;
+    if (channelId && state.acceptance.transcript.channelId !== channelId) return false;
     if (!state.confirmed) return true;
     try {
       const { clientId: _clientId, ...payload } = frame;
@@ -196,6 +202,7 @@ export class ConnectorSecureChannels {
             () => this.handleRequest({
               ...request, action, clientId,
               clientDeviceId: state.acceptance.transcript.initiator.id,
+              clientChannelId: state.acceptance.transcript.channelId,
             }));
         } catch (error) {
           if (!(error instanceof Error) || error.message !== 'connector_request_limit') throw error;
@@ -207,6 +214,7 @@ export class ConnectorSecureChannels {
           action: request.action,
           clientId,
           clientDeviceId: state.acceptance.transcript.initiator.id,
+          clientChannelId: state.acceptance.transcript.channelId,
         });
       }
       const response = await responsePromise;

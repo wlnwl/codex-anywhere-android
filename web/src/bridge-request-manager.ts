@@ -32,6 +32,10 @@ type RequestFrame = {
   payload: Record<string, unknown>;
 };
 
+function isDesktopTextDelivery(frame: RequestFrame) {
+  return frame.action === 'turn.start' && frame.payload.delivery === 'desktop_tool';
+}
+
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
@@ -108,7 +112,8 @@ export class BridgeRequestManager {
       if (timeoutMs != null) {
         pending.timer = setTimeout(() => {
           pending.reject(Object.assign(
-            new Error(action === 'turn.start' ? 'turn_start_timeout' : 'request_timeout'),
+            new Error(isDesktopTextDelivery(frame) ? 'desktop_delivery_unknown'
+              : action === 'turn.start' ? 'turn_start_timeout' : 'request_timeout'),
             { timeoutMs },
           ));
         }, timeoutMs);
@@ -139,10 +144,20 @@ export class BridgeRequestManager {
   }
 
   replay() {
+    this.interrupt();
     return replayPendingFrames(this.pending.values(), (frame) => this.pending.get(String(frame.requestId))?.send() === true);
   }
 
+  interrupt() {
+    // App-tool delivery has no durable message ID. A new channel could reach
+    // a restarted connector that cannot deduplicate the original submission.
+    for (const pending of this.pending.values()) {
+      if (isDesktopTextDelivery(pending.frame)) pending.reject(new Error('desktop_delivery_unknown'));
+    }
+  }
+
   rejectAll(message: string) {
+    this.interrupt();
     for (const pending of this.pending.values()) pending.reject(new Error(message));
   }
 

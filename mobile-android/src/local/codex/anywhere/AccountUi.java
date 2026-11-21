@@ -15,16 +15,27 @@ import android.widget.TextView;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.text.DecimalFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 /** Account controls for the selected computer. Login material stays in memory. */
 final class AccountUi {
     interface Sender {
-        void send(String action, JSONObject payload);
+        String send(String action, JSONObject payload);
     }
 
+    static final String QUOTA_ACTION = "account.rateLimits.read";
     private static final long LOGIN_POLL_MS = 2_000;
+    private static final DateTimeFormatter RESET_TIME = DateTimeFormatter.ofPattern("M月d日 HH:mm", Locale.CHINA);
     private final Activity activity;
     private final DialogUi ui;
     private final Sender sender;
@@ -35,6 +46,10 @@ final class AccountUi {
     private DialogUi.Sheet sheet;
     private DialogUi.Sheet confirmation;
     private JSONObject accountData;
+    private LinearLayout quotaPanel;
+    private JSONObject quotaData;
+    private String quotaRequestId;
+    private boolean quotaLoaded;
     private AccountChoice selected;
     private String pendingAction = "";
     private String loginId = "";
@@ -63,12 +78,15 @@ final class AccountUi {
         current.dialog.setOnDismissListener(dialog -> {
             if (sheet == current) {
                 sheet = null;
+                quotaPanel = null;
+                clearQuota();
                 handler.removeCallbacks(loginPoll);
                 handler.removeCallbacks(restartPoll);
                 dismissConfirmation();
             }
         });
         current.content.addView(ui.label("正在读取电脑上的账号…"));
+        addQuotaPanel();
         current.setSecondary("关闭", current::dismiss);
         current.show();
         if (!loginId.isEmpty()) {
@@ -77,6 +95,7 @@ final class AccountUi {
         } else if (pendingAction.isEmpty()) {
             request("account.sessions.list", listPayload());
         }
+        loadQuota();
     }
 
     void setForeground(boolean active) {
@@ -149,12 +168,22 @@ final class AccountUi {
         }
     }
 
+    void handleQuotaResponse(String requestId, boolean ok, JSONObject data) {
+        if (!isShowing() || !requestId.equals(quotaRequestId)) return;
+        quotaRequestId = null;
+        quotaLoaded = true;
+        quotaData = ok ? data : null;
+        renderQuota();
+    }
+
     void close() {
         handler.removeCallbacks(loginPoll);
         handler.removeCallbacks(restartPoll);
         dismissConfirmation();
         if (sheet != null) sheet.dismiss();
         sheet = null;
+        quotaPanel = null;
+        clearQuota();
         pendingAction = "";
         accountData = null;
         choices.clear();
@@ -183,6 +212,7 @@ final class AccountUi {
         String activeWorkspaceName = activeAccount == null ? "" : displayText(jsonString(activeAccount, "workspaceName"));
         if (!activePlan.isEmpty()) sheet.content.addView(ui.label("已选择订阅 · " + activePlan));
         if (!activeWorkspaceName.isEmpty()) sheet.content.addView(ui.label("已选择工作区 · " + activeWorkspaceName));
+        addQuotaPanel();
         if (sessions != null) {
             for (int i = 0; i < sessions.length(); i++) {
                 JSONObject session = sessions.optJSONObject(i);
@@ -203,13 +233,105 @@ final class AccountUi {
             if (!pendingAction.isEmpty() || restartPending()) return;
             request("account.login.start", new JSONObject());
         }));
-        sheet.content.addView(ui.actionLink("刷新账号列表", "重新读取电脑上的登录状态。", () -> {
+        sheet.content.addView(ui.actionLink("刷新账号和额度", "重新读取电脑上的登录状态和额度。", () -> {
             if (!pendingAction.isEmpty()) return;
+            clearQuota();
             request("account.sessions.list", listPayload());
+            loadQuota();
         }));
         sheet.setSecondary("关闭", sheet::dismiss);
         sheet.setPrimary("切换账号 / 工作区", this::confirmSwitch);
         sheet.setPrimaryEnabled(false);
+        loadQuota();
+    }
+
+    private void addQuotaPanel() {
+        quotaPanel = new LinearLayout(activity);
+        quotaPanel.setOrientation(LinearLayout.VERTICAL);
+        quotaPanel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        sheet.content.addView(quotaPanel);
+        renderQuota();
+    }
+
+    private void loadQuota() {
+        if (!isShowing() || quotaPanel == null || quotaLoaded || quotaRequestId != null || restartPending()
+                || !loginId.isEmpty() || !pendingAction.isEmpty() && !pendingAction.equals("account.sessions.list")) return;
+        try {
+            quotaRequestId = sender.send(QUOTA_ACTION, new JSONObject());
+        } catch (RuntimeException error) {
+            quotaRequestId = null;
+        }
+        if (quotaRequestId == null) quotaLoaded = true;
+        renderQuota();
+    }
+
+    private void clearQuota() {
+        quotaRequestId = null;
+        quotaData = null;
+        quotaLoaded = false;
+        renderQuota();
+    }
+
+    private void renderQuota() {
+        if (quotaPanel == null) return;
+        quotaPanel.removeAllViews();
+        quotaPanel.addView(ui.label("Codex 额度"));
+        if (!quotaLoaded) {
+            quotaPanel.addView(ui.label(restartPending() ? "重启完成后刷新额度。" : "正在读取额度…"));
+            return;
+        }
+        if (quotaData == null) {
+            quotaPanel.addView(ui.label("暂时无法读取当前账号的额度。"));
+            return;
+        }
+        List<String> details = quotaDetails(quotaData);
+        if (details.isEmpty()) quotaPanel.addView(ui.label("当前账号没有返回额度窗口。"));
+        else for (String detail : details) quotaPanel.addView(ui.label(detail));
+    }
+
+    private static List<String> quotaDetails(JSONObject data) {
+        List<String> details = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        addQuotaLimit(details, seen, data.optJSONObject("rateLimits"), "codex");
+        JSONObject byId = data.optJSONObject("rateLimitsByLimitId");
+        if (byId == null) return details;
+        List<String> ids = new ArrayList<>();
+        for (Iterator<String> keys = byId.keys(); keys.hasNext();) ids.add(keys.next());
+        Collections.sort(ids);
+        for (String id : ids) addQuotaLimit(details, seen, byId.optJSONObject(id), id);
+        return details;
+    }
+
+    private static void addQuotaLimit(List<String> details, Set<String> seen, JSONObject limit, String fallbackId) {
+        if (limit == null) return;
+        String id = jsonString(limit, "limitId");
+        if (id.isEmpty()) id = fallbackId;
+        if (seen.contains(id)) return;
+        String primary = quotaWindow(limit.optJSONObject("primary"), "主要窗口");
+        String secondary = quotaWindow(limit.optJSONObject("secondary"), "次要窗口");
+        if (primary.isEmpty() && secondary.isEmpty()) return;
+        seen.add(id);
+        String name = displayText(jsonString(limit, "limitName"));
+        if (name.isEmpty()) name = id.equals("codex") ? "Codex" : displayText(id);
+        String windows = primary.isEmpty() ? secondary : secondary.isEmpty() ? primary : primary + "\n" + secondary;
+        details.add(name + "\n" + windows);
+    }
+
+    private static String quotaWindow(JSONObject window, String fallbackLabel) {
+        if (window == null || !(window.opt("usedPercent") instanceof Number)) return "";
+        double used = window.optDouble("usedPercent", Double.NaN);
+        if (!Double.isFinite(used) || used < 0) return "";
+        double remaining = 100 - Math.min(100, used);
+        String percent = remaining > 0 && remaining < 0.1 ? "<0.1" : new DecimalFormat("0.#").format(remaining);
+        long minutes = window.optLong("windowDurationMins", 0);
+        String label = minutes <= 0 ? fallbackLabel : minutes % 1440 == 0 ? minutes / 1440 + " 天"
+                : minutes % 60 == 0 ? minutes / 60 + " 小时" : minutes + " 分钟";
+        String text = label + " · 剩余 " + percent + "%";
+        long resetsAt = window.optLong("resetsAt", 0);
+        if (resetsAt > 0 && resetsAt <= 8_640_000_000_000L) {
+            text += " · " + RESET_TIME.format(Instant.ofEpochSecond(resetsAt).atZone(ZoneId.systemDefault())) + " 重置";
+        }
+        return text;
     }
 
     private void addSessionChoices(JSONObject session, String activeId, String activePlan) {
@@ -309,6 +431,7 @@ final class AccountUi {
     private void showLogin() {
         if (!isShowing() || loginId.isEmpty()) return;
         sheet.content.removeAllViews();
+        quotaPanel = null;
         sheet.content.addView(ui.label("在浏览器中登录目标账号，并输入下面的验证码。"));
         sheet.content.addView(ui.label("授权成功后更新电脑上的登录，重启 Codex 后生效。"));
         TextView code = ui.label(loginCode);
@@ -506,6 +629,8 @@ final class AccountUi {
     private void request(String action, JSONObject payload) {
         if (!isShowing() || !pendingAction.isEmpty()) return;
         pendingAction = action;
+        if (action.equals("account.sessions.switch") || action.equals("account.login.start")
+                || action.equals("account.desktop.restart")) clearQuota();
         if (!action.equals("account.login.status") && !action.equals("account.desktop.restart.status"))
             sheet.setBusy(true, action.equals("account.desktop.restart") ? "正在重启…" : "正在处理…");
         try {
@@ -521,6 +646,7 @@ final class AccountUi {
             } else {
                 sheet.setError("请求未发出，请检查电脑连接后重试。");
             }
+            loadQuota();
         }
     }
 

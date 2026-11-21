@@ -4,6 +4,10 @@ $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
 $sdk="$env:LOCALAPPDATA\Android\Sdk"
 $bt="$sdk\build-tools\35.0.0"
 $jar="$sdk\platforms\android-35\android.jar"
+$manifest=[xml](Get-Content -LiteralPath AndroidManifest.xml -Raw)
+$version=$manifest.DocumentElement.GetAttribute('versionName','http://schemas.android.com/apk/res/android')
+if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Missing or invalid Android versionName.' }
+$apk="out/CodexAnywhere-$version.apk"
 New-Item -ItemType Directory -Force res,out/classes,out/dex | Out-Null
 & "$bt\aapt.exe" package -f -M AndroidManifest.xml -S res -A assets -I $jar -F out/base.apk
 if ($LASTEXITCODE -ne 0) { throw 'Android packaging failed.' }
@@ -21,7 +25,7 @@ Pop-Location
 if ($LASTEXITCODE -ne 0) { throw 'APK alignment failed.' }
 $keytool=Join-Path $env:JAVA_HOME bin/keytool.exe
 if(!(Test-Path out/development.jks)){& $keytool -genkeypair -keystore out/development.jks -storepass android -keypass android -alias development -dname 'CN=Codex Anywhere Local' -keyalg RSA -validity 3650}
-& "$bt\apksigner.bat" sign --ks out/development.jks --ks-pass pass:android --out out/CodexAnywhere-0.6.3.apk out/aligned.apk
+& "$bt\apksigner.bat" sign --ks out/development.jks --ks-pass pass:android --out $apk out/aligned.apk
 if ($LASTEXITCODE -ne 0) { throw 'APK signing or verification failed.' }
-& "$bt\apksigner.bat" verify out/CodexAnywhere-0.6.3.apk
+& "$bt\apksigner.bat" verify $apk
 if ($LASTEXITCODE -ne 0) { throw 'APK signing or verification failed.' }

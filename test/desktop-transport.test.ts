@@ -4,6 +4,7 @@ import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DesktopInputPipe } from '../src/connector/desktop-input-pipe.js';
 import { CodexDesktopClient, internals } from '../src/connector/codex-desktop.js';
 import { NativePipeClient, NativeRequestError, encodeNativeFrame, MAX_FRAME_BYTES } from '../src/connector/desktop-native-pipe.js';
 import { friendlyError } from '../web/src/app-utils.js';
@@ -139,6 +140,45 @@ test('failure before dispatch is unavailable, not unknown delivery', async () =>
   const desktop = new CodexDesktopClient();
   desktop.userInput.pipe.request = async () => { throw new NativeRequestError('connect timeout', false); };
   await assert.rejects(desktop.sendMessage({ threadId: 'fixture', text: 'one', requestId: 'one' }), /^Error: desktop_input_unavailable$/);
+});
+
+test('missing native endpoint is distinguished from other connection failures', async () => {
+  const path = process.platform === 'win32'
+    ? '\\\\.\\pipe\\anywhere-missing-' + randomUUID()
+    : join(tmpdir(), 'anywhere-missing-' + randomUUID() + '.sock');
+  const pipe = new DesktopInputPipe(path);
+  try {
+    const desktop = new CodexDesktopClient();
+    desktop.userInput.pipe.connect = (timeoutMs) => pipe.connect(timeoutMs);
+    await assert.rejects(desktop.sendMessage({ threadId: 'fixture', text: 'one', requestId: 'one' }), /^Error: desktop_input_pipe_missing$/);
+  } finally { pipe.close(); }
+});
+
+test('explicit Desktop text delivery requires an absent native pipe and never retries uncertain delivery', async () => {
+  let calls = 0;
+  await host((request, socket) => {
+    calls++;
+    assert.equal(request.method, 'tools/call');
+    assert.equal(request.params.tool, 'send_message_to_thread');
+    assert.equal(request.params.threadId, 'fixture');
+    assert.deepEqual(request.params.arguments, { threadId: 'fixture', prompt: 'one' });
+    if (calls === 1) reply(socket, request.id, { success: true });
+    else socket.destroy();
+  }, async client => {
+    const desktop = desktopFor(client);
+    const draft = { threadId: 'fixture', text: ' one ' };
+    desktop.userInput.pipe.connect = async () => {};
+    await assert.rejects(desktop.sendTextViaAppTool(draft), /desktop_input_available/);
+    desktop.userInput.pipe.connect = async () => { throw new NativeRequestError('timeout', false); };
+    await assert.rejects(desktop.sendTextViaAppTool(draft), /desktop_text_delivery_unavailable/);
+    assert.equal(calls, 0);
+    desktop.userInput.pipe.connect = async () => {
+      throw new NativeRequestError('missing', false, 'desktop_input_pipe_missing');
+    };
+    assert.deepEqual(await desktop.sendTextViaAppTool(draft), { threadId: 'fixture', delivery: 'desktop' });
+    await assert.rejects(desktop.sendTextViaAppTool(draft), /desktop_delivery_unknown/);
+    assert.equal(calls, 2);
+  });
 });
 
 test('probe requires the correct namespace and operation dispatch checks cached capabilities', async () => {

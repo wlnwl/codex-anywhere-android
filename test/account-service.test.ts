@@ -34,6 +34,31 @@ function setup(options: { onAccountChanged?: () => void } = {}) {
     advance(ms: number) { now += ms; }, notify(method: string, params: any) { listener?.(method, params); } };
 }
 
+test('quota reads return only usage windows for the active account', async () => {
+  const { service, calls, handle } = setup();
+  const primary = { usedPercent: 79, windowDurationMins: 10_080, resetsAt: 1_795_350_171 };
+  const rateLimits = { limitId: 'codex', limitName: null, primary, secondary: null };
+  handle(async () => ({
+    accountId: 'private', rateLimitUpsell: 'private',
+    rateLimits: { ...rateLimits, primary: { ...primary, privateField: 'private' }, credits: { balance: 'private' } },
+    rateLimitsByLimitId: { codex: rateLimits, 'invalid id': rateLimits },
+  }));
+  assert.deepEqual(await service.dispatch('account.rateLimits.read', { accountId: 'ignored' }, 'phone-a'), {
+    rateLimits, rateLimitsByLimitId: { codex: rateLimits },
+  });
+  assert.deepEqual(calls, [{ method: 'account/rateLimits/read', params: {} }]);
+});
+
+test('quota reads spanning a native account change do not expose an old snapshot', async () => {
+  const { service, handle, notify } = setup();
+  const reading = deferred<object>();
+  handle(() => reading.promise);
+  const pending = service.dispatch('account.rateLimits.read', {}, 'phone-a');
+  notify('account/updated', {});
+  reading.resolve({ rateLimits: { primary: { usedPercent: 35 } } });
+  await assert.rejects(pending, /account_rate_limits_unavailable/);
+});
+
 test('account listing exposes only the session and workspace display fields', async () => {
   const { service, calls } = setup();
   const result = await service.dispatch('account.sessions.list', {}, 'phone-a');

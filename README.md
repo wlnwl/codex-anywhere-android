@@ -6,6 +6,8 @@ This distribution adds a native Android client and Codex account controls for An
 
 [Download Android APK v0.6.3](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.3/CodexAnywhere-0.6.3.apk) · [Release notes](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.3) · [Android setup and build](mobile-android/README.md)
 
+The Android source is at v0.6.6. The link above still downloads the published v0.6.3 APK.
+
 Documentation for **v0.4.5 (2026-10-22)** · [Release and upgrade](docs/release-0.4.5.md) · [Documentation index](docs/README.md)
 
 [![CI](https://github.com/gaotong132/codex-anywhere/actions/workflows/ci.yml/badge.svg)](https://github.com/gaotong132/codex-anywhere/actions/workflows/ci.yml)
@@ -55,6 +57,12 @@ The public APK uses a separate signing key. If Android refuses an in-place updat
 - **Follow task progress** — see running status, unread updates, progress, plans, tool purpose and elapsed time.
   Completed turns retain action summaries, configuration changes and failure or cancellation reasons; automation reports
   keep their full body while redundant notifications and internal fields stay out of the display.
+- **Android task notifications** — opt in for notifications when a task completes, fails, or waits for approval or input.
+  Tap a notification to return to the chat. Alerts hide chat text, commands and paths and are delivered over the existing
+  encrypted connection while the app is online. The app does not receive offline push notifications.
+- **Keep sending when Windows native input is missing** — compatible older chats can use the normal Send button,
+  including Web attachments. The connector verifies that the chat is idle and can acquire its writer before continuing the same
+  conversation through app-server. If the desktop still owns the chat, the draft is retained.
 - **Add instructions during a run** — steer active tasks with text; existing Windows sessions use native Desktop user input without an inter-chat forwarding label
   when supported. Stop connector-owned turns or confirmed Desktop turns from Web; messages are sent directly without a Web queue.
   The existing detail line above the composer briefly confirms delivery after Codex on the selected computer or ECS accepts the message.

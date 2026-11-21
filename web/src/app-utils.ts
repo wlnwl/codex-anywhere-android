@@ -38,7 +38,12 @@ export function friendlyError(error: unknown) {
   if (message === 'session_restore_unsupported') return t('当前连接器不支持恢复，请更新 PC 连接器或在 Codex 客户端恢复。', 'Update the PC connector or restore in Codex Desktop.');
   if (message === 'connector_offline') return t('当前执行环境离线，请确认对应连接器正在运行。', 'The current environment is offline. Make sure its connector is running.');
   if (message === 'another_turn_is_active') return t('当前会话正在启动或执行任务，请稍后追加消息或先停止。', 'This session already has an active turn. Steer it when ready or stop it first.');
-  if (message === 'desktop_first_turn_busy') return t('电脑端另一个新会话的首轮仍在执行，请等它完成后再新建。', 'Another Desktop task is completing its first turn. Wait before creating another task.');
+  if (message === 'desktop_first_turn_busy') return t('这台电脑的连接器正在执行另一项任务，请等它结束后再发送。', 'This computer’s connector is running another task. Wait for it to finish before sending.');
+  if (message === 'managed_sessions_persist_failed') return t('连接器未能保存新会话，消息尚未发送。请检查电脑上的连接器设置后重试。', 'The connector could not save the new session. Your message was not sent. Check the connector on your computer and try again.');
+  if (message === 'managed_sessions_limit_reached') return t('这台电脑的连接器已达到独立会话上限，无法新建会话。', 'This computer’s connector has reached its limit for independent sessions.');
+  if (message === 'legacy_session_busy') return t('电脑上的会话正在运行或等待处理。消息尚未发送，请等任务结束后重试。', 'This session is running or waiting for input on your computer. Your message was not sent. Wait for the task to finish before retrying.');
+  if (message === 'legacy_session_state_unavailable') return t('连接器暂时无法确认旧会话的状态，消息尚未发送。', 'The connector could not verify the existing session state. Your message was not sent.');
+  if (message === 'legacy_session_native_available') return t('桌面原生通道已恢复。消息尚未发送，请再点一次发送。', 'Native Desktop input is available again. Your message was not sent. Click Send again.');
   if (message === 'turn_stop_mismatch') return t('运行状态已经变化，请刷新后重试。', 'The run state changed. Refresh and try again.');
   if (message === 'project_directory_required') return t('新会话必须选择或填写项目目录。', 'Choose or enter a project directory for the new session.');
   if (message === 'session_project_directory_unavailable') return t('该会话没有可用的项目目录，无法通过连接器继续。', 'This session has no project directory available to the connector.');
@@ -62,7 +67,12 @@ export function friendlyError(error: unknown) {
   if (message === 'desktop_delivery_unknown' || message === 'desktop_delivery_timeout') return t('消息可能已经送达，但桌面 Codex 的确认丢失。请先查看会话中的消息和回复，确认未送达后再重试，避免重复发送。', 'The message may have arrived, but confirmation from Codex Desktop was lost. Check the conversation before retrying to avoid sending it twice.');
   if (message.startsWith('desktop_tool_unavailable:')) return t('当前桌面 Codex 不支持此操作，请更新桌面应用后重试。', 'This Codex Desktop host does not support this action. Update the desktop app and try again.');
   if (message === 'desktop_request_too_large') return t('消息超过桌面通道大小限制，尚未发送。请缩短内容后重试。', 'The message exceeds the desktop channel size limit and was not sent. Shorten it and try again.');
+  if (message === 'desktop_image_unsupported') return t('当前通道无法按这种方式发送图片。请刷新页面后重新附上图片。', 'This channel cannot send images in this format. Refresh and attach the image again.');
   if (message === 'desktop_input_unavailable') return t('桌面原生输入通道尚未就绪。请打开目标会话并确认 Codex 已更新后重试。', 'Desktop native input is not ready. Open the target chat and check your Codex version before retrying.');
+  if (message === 'desktop_input_pipe_missing') return t('当前桌面应用未提供原生输入通道，消息尚未发送。', 'Desktop native input is unavailable. The message was not sent.');
+  if (message === 'desktop_input_available') return t('桌面原生输入已恢复，请使用常规发送按钮。', 'Desktop native input is available. Use the regular Send button.');
+  if (message === 'desktop_text_delivery_unavailable') return t('暂时无法通过桌面工具发送文本，请确认 Codex Desktop 已打开。', 'Text delivery through the desktop tool is unavailable. Make sure Codex Desktop is open.');
+  if (message === 'desktop_text_delivery_text_only') return t('通过桌面发送仅支持文字。请先移除附件。', 'Desktop text delivery requires removing the attachment.');
   if (message === 'desktop_input_unsupported') return t('当前 Codex 版本不支持此原生操作，需要更新 Connector 的协议适配。', 'This Codex version does not support this native operation. Update the Connector protocol adapter.');
   if (message === 'desktop_input_not_ready' || message.startsWith('desktop_state_')) return t('暂时无法读取桌面会话状态，请在电脑上打开该会话后重试。', 'Desktop chat state is unavailable. Open the chat on your computer and retry.');
   if (message === 'desktop_settings_changed') return t('桌面设置已变化，未能确认本次修改。请刷新后检查设置。', 'Desktop settings changed. Refresh and check the current settings.');
@@ -117,7 +127,7 @@ export function friendlyError(error: unknown) {
     return t(`桌面 Codex 未接收这条消息：${detail}`, `Codex Desktop did not receive this message: ${detail}`);
   }
   if (message === 'thread_active_writer_conflict') {
-    return t('无法通过桌面通道直接发送，消息没有进入排队。请确认桌面 Codex 在线后重试。', 'Direct Desktop delivery is unavailable and the message was not queued. Confirm Codex Desktop is online, then retry.');
+    return t('这个会话仍由另一个 Codex 进程打开。消息尚未发送，请等它释放会话后再试。', 'Another Codex process still has this session open. Your message was not sent. Try again after it releases the session.');
   }
   return message;
 }
@@ -189,8 +199,12 @@ export function canStopOwnedTurn(running: boolean, ownedThreadId: string | null,
   return running && Boolean(ownedThreadId) && ownedThreadId === selectedThreadId;
 }
 
-export function ownsPendingSubmission(existingSession: boolean, mode: 'desktop' | 'headless' | undefined) {
-  return !existingSession || mode === 'headless';
+export function ownsPendingSubmission(
+  existingSession: boolean,
+  mode: 'desktop' | 'headless' | undefined,
+  executionRoute?: 'appServer',
+) {
+  return !existingSession || mode === 'headless' || executionRoute === 'appServer';
 }
 
 export function canSteerOwnedTurn(

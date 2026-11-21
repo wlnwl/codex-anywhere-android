@@ -104,6 +104,7 @@ export class AccountControls {
       if (this.restarting || this.restartIsPending()) throw new Error('account_operation_in_progress');
       if (this.options.isBusy?.()) throw new Error('account_active_turn');
     }
+    if (action === 'account.rateLimits.read') return this.service.dispatch(action, payload, owner);
     const result = await this.service.dispatch(action, payload, owner);
     await this.refreshRestart();
     return this.withRestartState(result);

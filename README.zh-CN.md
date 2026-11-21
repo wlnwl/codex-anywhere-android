@@ -6,6 +6,8 @@
 
 [下载 Android APK v0.6.3](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.3/CodexAnywhere-0.6.3.apk) · [发布说明](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.3) · [安卓版配置与构建](mobile-android/README.md)
 
+安卓版源码已更新到 v0.6.6，上方链接仍下载已发布的 v0.6.3 APK。
+
 文档对应 **v0.4.5（2026-10-22）** · [发布与升级](docs/release-0.4.5.zh-CN.md) · [文档索引](docs/README.zh-CN.md)
 
 [![CI](https://github.com/gaotong132/codex-anywhere/actions/workflows/ci.yml/badge.svg)](https://github.com/gaotong132/codex-anywhere/actions/workflows/ci.yml)
@@ -51,6 +53,10 @@ Codex Anywhere 专注个人使用场景，会话保存在执行节点上；不�
   同一会话仍按轮次顺序执行，运行中发送的文字追加到当前轮次。
 - **跟随任务进展**：查看运行状态、未读提醒、进度、计划、工具用途和执行耗时。已完成轮次保留操作汇总、
   配置变化及失败或中止原因；自动任务报告保留完整正文，并过滤重复通知与内部字段。
+- **安卓任务通知**：开启后，任务完成、失败、等待审批或等待输入时可收到系统通知，点击回到对应会话。
+  通知不显示会话正文、命令和路径；通过现有加密连接发送，App 断线后没有离线推送。
+- **旧会话继续发送**：Windows 原生输入通道缺失时，符合条件的旧会话可用普通「发送」继续聊天，网页版可带附件。
+  连接器先确认会话空闲并取得写入权，再通过 app-server 继续同一会话。桌面仍占用时会保留草稿。
 - **随时补充指令**：向运行中的任务追加文字，已有 Windows 会话复用桌面原生用户输入，空闲时开始新轮次、运行中追加，不再显示另一聊天转发。
   连接器持有的轮次和已确认身份的 Desktop 轮次可在 Web 停止；消息直接发送，无需维护 Web 消息队列。
   电脑端或 ECS 的 Codex 确认接收后，输入框上方状态框的下方详情行临时显示“上一条消息已送达”，下一次执行状态更新会替换它；没有后续更新则在 5 秒后消失。这表示消息已接收，不表示任务已完成；执行端仍需保持运行。等待回执或投递结果不确定时不会显示成功提示。
