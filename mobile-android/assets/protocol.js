@@ -4,7 +4,7 @@
   var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-  // ../codex_anywhere/node_modules/@noble/ed25519/index.js
+  // node_modules/@noble/ed25519/index.js
   var freeze = Object.freeze;
   var P = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn;
   var N = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn;
@@ -499,7 +499,7 @@
     return { p, f };
   };
 
-  // ../codex_anywhere/node_modules/@noble/hashes/_u64.js
+  // node_modules/@noble/hashes/_u64.js
   var U32_MASK64 = /* @__PURE__ */ (() => BigInt(2 ** 32 - 1))();
   var _32n = /* @__PURE__ */ BigInt(32);
   function fromBig(n, le = false) {
@@ -542,7 +542,7 @@
   var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
   var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
-  // ../codex_anywhere/node_modules/@noble/hashes/utils.js
+  // node_modules/@noble/hashes/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -702,7 +702,7 @@
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // ../codex_anywhere/node_modules/@noble/hashes/_md.js
+  // node_modules/@noble/hashes/_md.js
   function Chi(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -833,7 +833,7 @@
     327033209
   ]);
 
-  // ../codex_anywhere/node_modules/@noble/hashes/sha2.js
+  // node_modules/@noble/hashes/sha2.js
   var SHA256_K = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -1293,7 +1293,7 @@
     return verify(hexToBytes2(signature), bytes, hexToBytes2(identity2.publicKey));
   }
 
-  // ../codex_anywhere/node_modules/@noble/ciphers/utils.js
+  // node_modules/@noble/ciphers/utils.js
   function isBytes3(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -1480,7 +1480,7 @@
     return cr.getRandomValues(new Uint8Array(bytesLength));
   }
 
-  // ../codex_anywhere/node_modules/@noble/hashes/hmac.js
+  // node_modules/@noble/hashes/hmac.js
   var _HMAC = class {
     constructor(hash, key) {
       __publicField(this, "oHash");
@@ -1557,7 +1557,7 @@
     return hmac_;
   })();
 
-  // ../codex_anywhere/node_modules/@scure/base/index.js
+  // node_modules/@scure/base/index.js
   var freeze2 = (fn) => Object.freeze(fn());
   function isBytes4(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
@@ -1759,7 +1759,7 @@
     return bytesToHex2(hmac(sha256, hexToBytes2(verifier), utf8ToBytes(transcript)));
   }
 
-  // ../codex_anywhere/node_modules/@noble/ciphers/_arx.js
+  // node_modules/@noble/ciphers/_arx.js
   var encodeStr = (str) => Uint8Array.from(str.split(""), (c) => c.charCodeAt(0));
   var sigma16_32 = /* @__PURE__ */ (() => swap32IfBE(u32(encodeStr("expand 16-byte k"))))();
   var sigma32_32 = /* @__PURE__ */ (() => swap32IfBE(u32(encodeStr("expand 32-byte k"))))();
@@ -1889,7 +1889,7 @@
     };
   }
 
-  // ../codex_anywhere/node_modules/@noble/ciphers/_poly1305.js
+  // node_modules/@noble/ciphers/_poly1305.js
   function u8to16(a, i) {
     return a[i++] & 255 | (a[i++] & 255) << 8;
   }
@@ -2140,7 +2140,7 @@
   };
   var poly1305 = /* @__PURE__ */ wrapMacConstructor(32, (key) => new Poly1305(key));
 
-  // ../codex_anywhere/node_modules/@noble/ciphers/chacha.js
+  // node_modules/@noble/ciphers/chacha.js
   function chachaCore(s, k, n, out, cnt, rounds = 20) {
     let y00 = s[0], y01 = s[1], y02 = s[2], y03 = s[3], y04 = k[0], y05 = k[1], y06 = k[2], y07 = k[3], y08 = k[4], y09 = k[5], y10 = k[6], y11 = k[7], y12 = cnt, y13 = n[0], y14 = n[1], y15 = n[2];
     let x00 = y00, x01 = y01, x02 = y02, x03 = y03, x04 = y04, x05 = y05, x06 = y06, x07 = y07, x08 = y08, x09 = y09, x10 = y10, x11 = y11, x12 = y12, x13 = y13, x14 = y14, x15 = y15;
@@ -2311,7 +2311,7 @@
     /* @__PURE__ */ _poly1305_aead(xchacha20)
   );
 
-  // ../codex_anywhere/node_modules/@noble/curves/utils.js
+  // node_modules/@noble/curves/utils.js
   function aarray(item, title, inner = () => {
   }) {
     if (!Array.isArray(item))
@@ -2430,7 +2430,7 @@
     iter(optFields, true);
   }
 
-  // ../codex_anywhere/node_modules/@noble/curves/abstract/modular.js
+  // node_modules/@noble/curves/abstract/modular.js
   var _0n2 = /* @__PURE__ */ BigInt(0);
   var _1n2 = /* @__PURE__ */ BigInt(1);
   var _2n = /* @__PURE__ */ BigInt(2);
@@ -2859,7 +2859,7 @@
     return new _Field(ORDER, opts);
   }
 
-  // ../codex_anywhere/node_modules/@noble/curves/abstract/curve.js
+  // node_modules/@noble/curves/abstract/curve.js
   var _0n3 = /* @__PURE__ */ BigInt(0);
   var _1n3 = /* @__PURE__ */ BigInt(1);
   var _4n2 = /* @__PURE__ */ BigInt(4);
@@ -3246,7 +3246,7 @@
     };
   }
 
-  // ../codex_anywhere/node_modules/@noble/curves/abstract/edwards.js
+  // node_modules/@noble/curves/abstract/edwards.js
   var _0n4 = /* @__PURE__ */ BigInt(0);
   var _1n4 = /* @__PURE__ */ BigInt(1);
   var _2n2 = /* @__PURE__ */ BigInt(2);
@@ -3541,7 +3541,7 @@
     return Point2;
   }
 
-  // ../codex_anywhere/node_modules/@noble/curves/abstract/montgomery.js
+  // node_modules/@noble/curves/abstract/montgomery.js
   var _0n5 = /* @__PURE__ */ BigInt(0);
   var _1n5 = /* @__PURE__ */ BigInt(1);
   var _2n3 = /* @__PURE__ */ BigInt(2);
@@ -3688,7 +3688,7 @@
     });
   }
 
-  // ../codex_anywhere/node_modules/@noble/curves/ed25519.js
+  // node_modules/@noble/curves/ed25519.js
   var _0n6 = /* @__PURE__ */ BigInt(0);
   var _1n6 = /* @__PURE__ */ BigInt(1);
   var _2n4 = /* @__PURE__ */ BigInt(2);
@@ -3774,7 +3774,7 @@
     });
   })();
 
-  // ../codex_anywhere/node_modules/@noble/hashes/hkdf.js
+  // node_modules/@noble/hashes/hkdf.js
   var HKDF_COUNTER = /* @__PURE__ */ Uint8Array.of(0);
   var EMPTY_BUFFER = /* @__PURE__ */ Uint8Array.of();
   function expand(hash, prk, info, length = 32, _recycled) {

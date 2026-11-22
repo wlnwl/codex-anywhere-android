@@ -112,20 +112,9 @@ final class SendLedger {
         return Collections.unmodifiableList(result);
     }
 
-    synchronized boolean canRetryRejectedText(String deviceId, String threadId, String text, String reason) {
-        boolean rejected = false;
-        for (Entry entry : submissions.values()) {
-            if (!matchesText(entry, deviceId, threadId, text)) continue;
-            if (PENDING.equals(entry.state) || RECEIPT.equals(entry.state)
-                    || ACCEPTED.equals(entry.state) || UNCERTAIN.equals(entry.state)) return false;
-            if (FAILED.equals(entry.state) && Objects.equals(reason, entry.detail)) rejected = true;
-        }
-        return rejected;
-    }
-
-    synchronized void discardRejectedText(String deviceId, String threadId, String text, String reason) {
+    synchronized void discardRejectedText(String deviceId, String threadId, String text) {
         submissions.values().removeIf(entry -> matchesText(entry, deviceId, threadId, text)
-                && FAILED.equals(entry.state) && Objects.equals(reason, entry.detail));
+                && FAILED.equals(entry.state));
     }
 
     private static boolean matchesText(Entry entry, String deviceId, String threadId, String text) {

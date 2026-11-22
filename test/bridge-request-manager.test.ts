@@ -63,7 +63,7 @@ test('desktop tool sends become unconfirmed without replaying, even before a tra
     createId: () => String(++sequence),
     send: (frame) => { sent.push(frame.requestId); return true; },
   });
-  const payload = { threadId: 'chat', text: 'hello', delivery: 'desktop_tool' };
+  const payload = { threadId: 'chat', text: 'hello', allowDesktopTextFallback: true };
   const beforeAcknowledgement = assert.rejects(manager.request('turn.start', payload), /^Error: desktop_delivery_unknown$/);
   const afterAcknowledgement = assert.rejects(manager.request('turn.start', payload), /^Error: desktop_delivery_unknown$/);
   const ordinary = manager.request('turn.start', { threadId: 'chat', text: 'native' });
@@ -78,7 +78,7 @@ test('desktop tool sends become unconfirmed without replaying, even before a tra
 
 test('desktop tool sends report interrupted and expired deliveries as unconfirmed', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const payload = { threadId: 'chat', text: 'hello', delivery: 'desktop_tool' };
+  const payload = { threadId: 'chat', text: 'hello', allowDesktopTextFallback: true };
   const manager = new BridgeRequestManager({ isConnected: () => true, createId: () => 'tool', send: () => true });
   const disconnected = assert.rejects(manager.request('turn.start', payload), /^Error: desktop_delivery_unknown$/);
   manager.interrupt();

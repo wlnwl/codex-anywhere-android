@@ -53,7 +53,7 @@ export class CodexDesktopClient {
     return { threadId: targetThreadId, delivery: 'desktop' };
   }
 
-  async sendTextViaAppTool({ threadId, text }: Pick<DesktopMessage, 'threadId' | 'text'>) {
+  async sendTextViaAppTool({ threadId, text, model, thinking }: Pick<DesktopMessage, 'threadId' | 'text' | 'model' | 'thinking'>) {
     const targetThreadId = requireThreadId(threadId);
     const prompt = typeof text === 'string' ? text.trim() : '';
     if (!prompt) throw new Error('message_required');
@@ -68,7 +68,8 @@ export class CodexDesktopClient {
     try {
       result = await this.callTool({
         tool: 'send_message_to_thread',
-        arguments: { threadId: targetThreadId, prompt },
+        arguments: { threadId: targetThreadId, prompt,
+          ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) },
         callerThreadId: targetThreadId,
         callId: `bridge-text-${randomUUID()}`,
       });

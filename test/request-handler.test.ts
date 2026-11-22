@@ -68,6 +68,37 @@ function request(action, payload = {}) {
   return { action, payload, requestId: 'request-1', clientId: 'client-1' };
 }
 
+test('ordinary text send falls back only after a missing pipe and applies the selected Desktop tool model', async () => {
+  const calls: unknown[] = [];
+  let error = 'desktop_input_pipe_missing';
+  const models = [{ model: 'gpt-test', defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: [{ reasoningEffort: 'medium' }, { reasoningEffort: 'high' }] }];
+  const handle = createRequestHandler(createDependencies({
+    codex: { listModels: async () => models, startLegacyTurn: async () => assert.fail('Desktop must retain ownership') },
+    desktop: {
+      controls: {},
+      nativeInputMissing: async () => true,
+      assertLegacySessionIdle: async () => assert.fail(),
+      sendMessage: async () => { throw new Error(error); },
+      sendTextViaAppTool: async (input) => { calls.push(input); return { delivery: 'desktop' }; },
+    },
+  }));
+  const threadId = 'fixture';
+  const before = await handle(request('session.model-config.read', { threadId }));
+  assert.equal(before.data.source, 'desktop_tool');
+  assert.equal(before.data.model, 'gpt-test');
+  const chosen = { threadId, model: 'gpt-test', reasoningEffort: 'high' };
+  assert.equal((await handle(request('session.model-config.update', { ...chosen, fastMode: true }))).error, 'fast_mode_not_available');
+  assert.equal((await handle(request('session.model-config.update', chosen))).data.reasoningEffort, 'high');
+  assert.equal((await handle(request('session.model-config.read', { threadId }))).data.reasoningEffort, 'high');
+  const draft = { threadId, text: 'one', allowDesktopTextFallback: true };
+  assert.equal((await handle(request('turn.start', draft))).data.delivery, 'desktop');
+  assert.deepEqual(calls, [{ threadId, text: 'one', model: 'gpt-test', thinking: 'high' }]);
+  error = 'desktop_delivery_unknown';
+  assert.equal((await handle(request('turn.start', draft))).error, error);
+  assert.equal(calls.length, 1);
+});
+
 test('explicit Desktop text delivery accepts only text for an existing Desktop thread', async () => {
   const calls: any[] = [];
   const deps = createDependencies({

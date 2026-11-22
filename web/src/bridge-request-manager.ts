@@ -32,8 +32,9 @@ type RequestFrame = {
   payload: Record<string, unknown>;
 };
 
-function isDesktopTextDelivery(frame: RequestFrame) {
-  return frame.action === 'turn.start' && frame.payload.delivery === 'desktop_tool';
+function mayUseDesktopTextTool(frame: RequestFrame) {
+  return frame.action === 'turn.start'
+    && (frame.payload.allowDesktopTextFallback === true || frame.payload.delivery === 'desktop_tool');
 }
 
 type PendingRequest = {
@@ -112,7 +113,7 @@ export class BridgeRequestManager {
       if (timeoutMs != null) {
         pending.timer = setTimeout(() => {
           pending.reject(Object.assign(
-            new Error(isDesktopTextDelivery(frame) ? 'desktop_delivery_unknown'
+            new Error(mayUseDesktopTextTool(frame) ? 'desktop_delivery_unknown'
               : action === 'turn.start' ? 'turn_start_timeout' : 'request_timeout'),
             { timeoutMs },
           ));
@@ -152,7 +153,7 @@ export class BridgeRequestManager {
     // App-tool delivery has no durable message ID. A new channel could reach
     // a restarted connector that cannot deduplicate the original submission.
     for (const pending of this.pending.values()) {
-      if (isDesktopTextDelivery(pending.frame)) pending.reject(new Error('desktop_delivery_unknown'));
+      if (mayUseDesktopTextTool(pending.frame)) pending.reject(new Error('desktop_delivery_unknown'));
     }
   }
 

@@ -7,12 +7,13 @@ public class MainActivity extends Activity {
  final Map<String,Integer> requestGenerations=new HashMap<>();
  final Map<String,String> requestDevices=new HashMap<>();
  List<ConversationHistory.Message> historyMessages=new ArrayList<>();
- ScrollView historyScroll;Button sendButton,desktopTextButton;
+ ScrollView historyScroll;Button sendButton,modelButton;
  String historyRequestId="",historySignature="",conversationTitle="",streamText="",streamTurnId="";
  boolean foreground=true,historyLoaded=false,historyDirty=false,selectingDevice=false,forceHistoryBottom=false;
  boolean relayAuthenticated=false;
  Dialog deviceSheet;
  AccountUi accounts;
+ ModelUi models;
  TaskNotifications notifications;
  TaskNotifications.Target notificationTarget;
  TextView approvalStatus;
@@ -43,7 +44,7 @@ public class MainActivity extends Activity {
    selectedDeviceId = prefs.getString("selectedDevice", "");
    thread = prefs.getString("thread:" + selectedDeviceId, "");
    conversationTitle = prefs.getString("title:" + selectedDeviceId, "");
-   server=prefs.getString("server","");
+   server=prefs.getString("server","https://youzi6336395.xyz:8443/");
 
    root = new LinearLayout(this);
    root.setOrientation(LinearLayout.VERTICAL);
@@ -107,6 +108,11 @@ public class MainActivity extends Activity {
    body.setContentDescription("会话消息区域");
    root.addView(historyScroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
+   modelButton = button("模型与思考强度 ▾", () -> models.open());
+   modelButton.setSingleLine();
+   modelButton.setEllipsize(android.text.TextUtils.TruncateAt.END);
+   root.addView(modelButton, new LinearLayout.LayoutParams(-1, dp(44)));
+   models = new ModelUi(popupUi, this::call, modelButton);
    draft = new EditText(this);
    draft.setHint("写下你的想法…");
    draft.setMinLines(2);
@@ -115,19 +121,11 @@ public class MainActivity extends Activity {
    root.addView(draft);
    sendButton = button("发送指令  ↗", this::submit);
    root.addView(sendButton, new LinearLayout.LayoutParams(-1, dp(56)));
-   desktopTextButton = button("通过桌面发送文本", () -> submit(true));
-   desktopTextButton.setVisibility(View.GONE);
-   root.addView(desktopTextButton, new LinearLayout.LayoutParams(-1, dp(48)));
-   draft.addTextChangedListener(new android.text.TextWatcher() {
-     public void beforeTextChanged(CharSequence text,int start,int count,int after) {}
-     public void onTextChanged(CharSequence text,int start,int before,int count) { updateDesktopTextButton(); }
-     public void afterTextChanged(android.text.Editable text) {}
-   });
    body.addView(text("随时继续你的工作", 25));
    body.addView(text("连接电脑，查看会话与跟进任务", 14));
    applyPalette(palette);
 
- engine=new WebView(this);engine.getSettings().setJavaScriptEnabled(true);engine.getSettings().setAllowFileAccess(false);engine.getSettings().setAllowContentAccess(false);engine.addJavascriptInterface(new Bridge(),"Native");engine.setWebViewClient(new WebViewClient(){public WebResourceResponse shouldInterceptRequest(WebView w,WebResourceRequest r){String path=r.getUrl().getPath();if(path==null||!path.startsWith("/__native/"))return new WebResourceResponse("text/plain","UTF-8",403,"Forbidden",null,new ByteArrayInputStream(new byte[0]));try{return new WebResourceResponse(path.endsWith(".js")?"application/javascript":"text/html","UTF-8",getAssets().open(path.endsWith(".js")?"protocol.js":"engine.html"));}catch(Exception e){return null;}}public boolean shouldOverrideUrlLoading(WebView w,WebResourceRequest r){return true;}public void onPageFinished(WebView w,String u){engineLoaded=true;js("setForeground("+foreground+")");if(!connectAfterLoad)return;connectAfterLoad=false;if(server.isEmpty())return;String pair=pendingPairCredential;pendingPairCredential=null;if(pair==null)pair=getIntent().getStringExtra("pairing");getIntent().removeExtra("pairing");js("connect("+JSONObject.quote(server)+","+JSONObject.quote(pair==null?"":pair)+")");}});engine.loadUrl((server.isEmpty()?"https://appassets.androidplatform.net":server.replaceAll("/+$",""))+"/__native/engine.html");}
+ engine=new WebView(this);engine.getSettings().setJavaScriptEnabled(true);engine.getSettings().setAllowFileAccess(false);engine.getSettings().setAllowContentAccess(false);engine.addJavascriptInterface(new Bridge(),"Native");engine.setWebViewClient(new WebViewClient(){public WebResourceResponse shouldInterceptRequest(WebView w,WebResourceRequest r){String path=r.getUrl().getPath();if(path==null||!path.startsWith("/__native/"))return new WebResourceResponse("text/plain","UTF-8",403,"Forbidden",null,new ByteArrayInputStream(new byte[0]));try{return new WebResourceResponse(path.endsWith(".js")?"application/javascript":"text/html","UTF-8",getAssets().open(path.endsWith(".js")?"protocol.js":"engine.html"));}catch(Exception e){return null;}}public boolean shouldOverrideUrlLoading(WebView w,WebResourceRequest r){return true;}public void onPageFinished(WebView w,String u){engineLoaded=true;js("setForeground("+foreground+")");if(!connectAfterLoad)return;connectAfterLoad=false;String pair=pendingPairCredential;pendingPairCredential=null;if(pair==null)pair=getIntent().getStringExtra("pairing");getIntent().removeExtra("pairing");js("connect("+JSONObject.quote(server)+","+JSONObject.quote(pair==null?"":pair)+")");}});engine.loadUrl(server.replaceAll("/+$","")+"/__native/engine.html");}
  int dp(int value) {
    return Math.round(value * getResources().getDisplayMetrics().density);
  }
@@ -201,7 +199,7 @@ public class MainActivity extends Activity {
    }
    sendButton.setBackground(surface(choice.accent, 16));
    sendButton.setTextColor(choice.onAccent);
-   styleButton(desktopTextButton);
+   styleButton(modelButton);
    colorHistory(body);
  }
 
@@ -270,9 +268,9 @@ public class MainActivity extends Activity {
      if(type.equals("ready")) {
        if(!relayAuthenticated||!selectedDeviceId.equals(e.optString("deviceId")))return;
        ready=true;selectingDevice=false;historyRequestId="";
-       updateDesktopTextButton();
        notice("已连接，正在同步会话…");call("sessions.list",new JSONObject());
        if(tryNotificationTarget())return;
+       models.ensureSelected(thread);
        updateNotificationWatch();
        if(!thread.isEmpty())readHistory(!historyLoaded);return;
      }
@@ -314,6 +312,7 @@ public class MainActivity extends Activity {
          accounts.handleResponse(action,frame.optBoolean("ok"),frame.optJSONObject("data"),frame.optString("error"));
          if(action.equals("account.sessions.switch")&&frame.optBoolean("ok")) {
            call("sessions.list",new JSONObject());
+           models.select(thread,ready);
            if(!thread.isEmpty())scheduleHistory(0);
          }
        }
@@ -323,10 +322,9 @@ public class MainActivity extends Activity {
        String error=frame.optString("error","电脑未接受指令");
        boolean ok=frame.optBoolean("ok");
        if(ok)sends.succeed(id);
-       else if("desktop_delivery_unknown".equals(error)||error.contains("timeout")||error.contains("uncertain")||error.contains("unconfirmed"))sends.uncertain(id,error);
+       else if(deliveryUncertain(error))sends.uncertain(id,error);
        else sends.fail(id,error);
-       if(!ok&&(DESKTOP_INPUT_PIPE_MISSING.equals(error)||"desktop_input_available".equals(error)
-           ||"desktop_text_delivery_unavailable".equals(error)||error.startsWith("desktop_tool_unavailable:"))) {
+       if(!ok) {
          restoreRejectedDraft(device,target,id);
        }
        if(selectedDeviceId.equals(device)&&thread.equals(target)) {
@@ -339,6 +337,10 @@ public class MainActivity extends Activity {
      boolean historyRead=action.equals("session.read");
      if(historyRead&&id.equals(historyRequestId))historyRequestId="";
      if(!selectedDeviceId.equals(device)||requestGeneration==null||requestGeneration!=generation)return;
+     if(action.equals(ModelUi.READ)||action.equals(ModelUi.UPDATE)) {
+       if(thread.equals(target))models.handle(id,frame.optBoolean("ok"),frame.optJSONObject("data"),frame.optString("error"));
+       return;
+     }
      if((historyRead||action.startsWith("session.permissions.")||action.equals("approval.pending"))&&!thread.equals(target))return;
      if(action.equals("approval.pending")) {
        JSONObject state=frame.optJSONObject("data");
@@ -412,8 +414,13 @@ public class MainActivity extends Activity {
      if(selectedDeviceId.equals(device))accounts.handleResponse(action,false,null,"账号操作未确认，请刷新账号状态。");
      return;
    }
+   if(action.equals(ModelUi.READ)||action.equals(ModelUi.UPDATE)) {
+     if(selectedDeviceId.equals(device)&&thread.equals(target))models.handle(id,false,null,message);
+     return;
+   }
    if(action.equals("turn.start")) {
      if(uncertain)sends.uncertain(id,message);else sends.fail(id,message);
+     if(!uncertain)restoreRejectedDraft(device,target,id);
      if(thread.equals(target)&&selectedDeviceId.equals(device)){renderConversation(false);notice(message);}
    } else if(id.equals(historyRequestId)) {
      historyRequestId="";
@@ -440,9 +447,9 @@ public class MainActivity extends Activity {
    showApprovalStatus(false);
    ready=false;selectingDevice=false;generation++;
    if(accounts!=null)accounts.close();
+   models.select("",false);
    cancelHistoryPoll();historyRequestId="";historyDirty=false;
    sends.disconnect(selectedDeviceId);pending.clear();requestThreads.clear();requestDevices.clear();requestGenerations.clear();
-   updateDesktopTextButton();
  }
 
  void invalidateRelay() {
@@ -521,7 +528,7 @@ public class MainActivity extends Activity {
  void selectComputer(String id,String label) {
      showApprovalStatus(false);
      prefs.edit().putString(draftKey(),draft.getText().toString()).apply();
-     accounts.close();sends.disconnect(selectedDeviceId);generation++;cancelHistoryPoll();historyRequestId="";historyDirty=false;
+     accounts.close();models.select("",false);sends.disconnect(selectedDeviceId);generation++;cancelHistoryPoll();historyRequestId="";historyDirty=false;
      selectedDeviceId=id;selectingDevice=true;deviceButton.setText(label+" ▾");
      prefs.edit().putString("selectedDevice",selectedDeviceId).putString("deviceName:"+selectedDeviceId,label).apply();
      historyMessages=new ArrayList<>();historySignature="";historyLoaded=false;streamText="";streamTurnId="";
@@ -590,7 +597,7 @@ public class MainActivity extends Activity {
    if(!ready)return true;
    notificationTarget=null;
    if(sessionDrawer!=null&&sessionDrawer.isShowing())sessionDrawer.dismiss();
-   if(target.thread.equals(thread)){updateNotificationWatch();readHistory(true);refreshApprovalStatus();return true;}
+   if(target.thread.equals(thread)){models.ensureSelected(thread);updateNotificationWatch();readHistory(true);refreshApprovalStatus();return true;}
    JSONObject selected=null;
    for(int i=0;i<sessionCatalog.length();i++){
      JSONObject item=sessionCatalog.optJSONObject(i);
@@ -684,6 +691,7 @@ public class MainActivity extends Activity {
    showApprovalStatus(false);
    prefs.edit().putString(draftKey(),draft.getText().toString()).apply();
    generation++;thread=item.optString("id");conversationTitle=item.optString("title",item.optString("name","会话"));
+   models.select(thread,ready);
    prefs.edit().putString("thread:"+selectedDeviceId,thread).putString("title:"+selectedDeviceId,conversationTitle).apply();
    historyRequestId="";historyDirty=false;historyLoaded=false;historySignature="";
    draft.setText(prefs.getString(draftKey(),""));
@@ -788,7 +796,6 @@ public class MainActivity extends Activity {
  }
 
  void renderConversation(boolean forceBottom) {
-   updateDesktopTextButton();
    if(thread.isEmpty())return;
    int oldY=historyScroll.getScrollY();
    boolean following=forceBottom||body.getHeight()-oldY-historyScroll.getHeight()<dp(100);
@@ -819,41 +826,30 @@ public class MainActivity extends Activity {
 
  private static String sendError(String error) {
    if(DESKTOP_INPUT_PIPE_MISSING.equals(error))return "桌面原生输入通道不可用，消息未发送";
-   if("desktop_input_available".equals(error))return "桌面原生输入已恢复，请使用发送指令";
    if("desktop_text_delivery_unavailable".equals(error)||error.startsWith("desktop_tool_unavailable:"))
      return "发送失败：桌面文本通道暂不可用";
-   if("desktop_delivery_unknown".equals(error))return "结果待确认，请先同步记录，勿重复发送";
+   if(deliveryUncertain(error))return "结果待确认，请先同步记录，勿重复发送";
    return "发送失败："+error;
  }
 
- private boolean canSendDesktopText(String value) {
-   return ready&&historyLoaded&&!value.isEmpty()&&!hasPendingSend()
-       &&sends.canRetryRejectedText(selectedDeviceId,thread,value,DESKTOP_INPUT_PIPE_MISSING);
- }
-
- private void updateDesktopTextButton() {
-   String value=draft.getText().toString().trim();
-   desktopTextButton.setVisibility(canSendDesktopText(value)?View.VISIBLE:View.GONE);
+ private static boolean deliveryUncertain(String error) {
+   return "desktop_delivery_unknown".equals(error)||error.contains("timeout")
+       ||error.contains("uncertain")||error.contains("unconfirmed");
  }
 
  void submit() {
-   submit(false);
- }
-
- private void submit(boolean desktopTool) {
    String value=draft.getText().toString().trim();
    if(value.isEmpty()||thread.isEmpty()){notice("先选择会话并输入指令");return;}
    if(!ready){notice("电脑连接已断开，草稿已保留");return;}
    if(!historyLoaded){notice("正在读取会话，请加载完成后发送");return;}
    if(hasPendingSend()){notice("上一条指令尚未确认，请稍候");return;}
-   if(desktopTool&&!canSendDesktopText(value))return;
+   if(models.isUpdating()){notice("模型设置正在保存，请稍候");return;}
    try {
      Set<String> baseline=new HashSet<>();for(ConversationHistory.Message row:historyMessages)if("user".equals(row.kind))baseline.add(row.id);
-     JSONObject payload=new JSONObject().put("threadId",thread).put("text",value);
-     if(desktopTool)payload.put("delivery","desktop_tool");
+     JSONObject payload=new JSONObject().put("threadId",thread).put("text",value).put("allowDesktopTextFallback",true);
      String id=call("turn.start",payload);
      if(id==null)return;
-     sends.discardRejectedText(selectedDeviceId,thread,value,DESKTOP_INPUT_PIPE_MISSING);
+     sends.discardRejectedText(selectedDeviceId,thread,value);
      sends.begin(id,selectedDeviceId,thread,value,baseline);
      draft.setText("");prefs.edit().putString(draftKey(),"").apply();
      renderConversation(true);notice("正在发送到电脑…");scheduleHistory(400);
@@ -866,11 +862,6 @@ public class MainActivity extends Activity {
    if(result==RESULT_OK&&data!=null) {
      String value=data.getStringExtra("pairing");if(value==null)return;
      connectionPairDraft=value;scannedPair=value;
-     if(server.isEmpty()&&connectionServerDraft.isEmpty()) {
-       android.net.Uri pair=android.net.Uri.parse(value);
-       if("https".equals(pair.getScheme())&&pair.getHost()!=null&&pair.getUserInfo()==null)
-         connectionServerDraft="https://"+pair.getAuthority()+"/";
-     }
    }
    connection();
    if(result==RESULT_OK&&connectionDialog!=null) {
@@ -977,5 +968,5 @@ public class MainActivity extends Activity {
 
 protected void onResume(){super.onResume();foreground=true;if(accounts!=null)accounts.setForeground(true);if(engine!=null){engine.onResume();if(engineLoaded)js("setForeground(true)");}updateNotificationWatch();if(ready&&!thread.isEmpty())scheduleHistory(0);}
 protected void onPause(){foreground=false;if(accounts!=null)accounts.setForeground(false);if(engineLoaded)js("setForeground(false)");cancelHistoryPoll();if(draft!=null&&prefs!=null)prefs.edit().putString(draftKey(),draft.getText().toString()).apply();super.onPause();}
-protected void onDestroy(){if(accounts!=null)accounts.close();syncHandler.removeCallbacksAndMessages(null);dismissDeviceSheet();if(connectionDialog!=null)connectionDialog.dismiss();engine.destroy();super.onDestroy();}
+protected void onDestroy(){if(accounts!=null)accounts.close();if(models!=null)models.select("",false);syncHandler.removeCallbacksAndMessages(null);dismissDeviceSheet();if(connectionDialog!=null)connectionDialog.dismiss();engine.destroy();super.onDestroy();}
 }

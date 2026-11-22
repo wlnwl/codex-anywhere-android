@@ -26,6 +26,11 @@ export function ModelConfigControl({
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<ModelConfigDraft | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const usesDesktopTool = config?.source === 'desktop_tool';
+  const desktopToolHint = t(
+    '通过桌面工具发送的后续文本消息会使用此设置。',
+    'These settings apply to subsequent text messages sent through the Desktop tool.',
+  );
   const selectedModel = config?.models.find((model) => model.model === config.model);
   const draftModel = config?.models.find((model) => model.model === draft?.model);
   const effortOptions = reasoningSliderOptions(draftModel);
@@ -44,7 +49,7 @@ export function ModelConfigControl({
     setDraft({
       model: config.model,
       reasoningEffort: reasoningSliderValue(model, config.reasoningEffort),
-      fastMode: config.fastMode,
+      fastMode: config.source !== 'desktop_tool' && config.fastMode,
     });
   }, [config]);
 
@@ -62,7 +67,7 @@ export function ModelConfigControl({
     setSaving(true);
     setError('');
     try {
-      await onSave(draft);
+      await onSave(usesDesktopTool ? { ...draft, fastMode: false } : draft);
       setOpen(false);
     } catch (saveError) {
       setError(friendlyError(saveError));
@@ -89,6 +94,7 @@ export function ModelConfigControl({
         aria-label={pending ? t('正在读取模型和思考强度', 'Loading model and reasoning effort') : undefined}
         title={config?.source === 'persisted' ? t('上次保存的模型设置；实时设置暂不可用，请在桌面修改', 'Last saved model settings; live settings are unavailable, edit on Desktop')
           : config?.readOnly ? t('已读取当前模型；完整设置暂不可用，请在桌面修改', 'Current model is available; edit settings on Desktop while full settings are unavailable')
+          : usesDesktopTool ? desktopToolHint
           : unavailable ? t('重新读取当前模型', 'Retry reading the current model')
           : disabled ? t('会话执行中，可预选并在结束后保存', 'Preselect now and save after the task finishes') : t('配置后续轮次', 'Configure subsequent turns')}
       >
@@ -97,7 +103,7 @@ export function ModelConfigControl({
           {!effortPending && <span className="model-config-effort">
             {unavailable ? t('点击重试', 'Retry') : config?.reasoningEffort ? reasoningEffortLabel(config.reasoningEffort) : t('默认思考', 'Default reasoning')}
           </span>}
-          {config?.fastMode && (
+          {!usesDesktopTool && config?.fastMode && (
             <span className="fast active" title={t('快速模式', 'Fast mode')}>
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.2 1.8 4.7 10h4.8l-.8 8.2 6.6-9.6h-4.8l.7-6.8Z" /></svg>
             </span>
@@ -108,7 +114,7 @@ export function ModelConfigControl({
       {open && draft && config && (
         <div className="model-config-popover">
           <div className="model-config-toolbar">
-            <button
+            {!usesDesktopTool && <button
               className={`model-fast-button${draft.fastMode ? ' active' : ''}`}
               type="button"
               aria-pressed={draft.fastMode}
@@ -120,7 +126,7 @@ export function ModelConfigControl({
               onClick={() => setDraft({ ...draft, fastMode: !draft.fastMode })}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13.3 2.5-8 10h5.9l-1 9 8.5-12h-6.1l.7-7Z" /></svg>
-            </button>
+            </button>}
             <CustomSelect
               className="model-config-model-select"
               value={draft.model}
@@ -143,7 +149,7 @@ export function ModelConfigControl({
                 setDraft({
                   model: nextModel.model,
                   reasoningEffort: reasoningSliderValue(nextModel, draft.reasoningEffort),
-                  fastMode: draft.fastMode && fastTierAvailable(nextModel),
+                  fastMode: !usesDesktopTool && draft.fastMode && fastTierAvailable(nextModel),
                 });
               }}
             />
@@ -174,6 +180,7 @@ export function ModelConfigControl({
               ))}
             </span>
           </label>
+          {usesDesktopTool && <p className="model-config-hint">{desktopToolHint}</p>}
           {disabled && <p className="model-config-hint">{t(
             '当前正在执行，可预选并在结束后保存',
             'Preselect now and save after the task finishes',

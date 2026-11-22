@@ -1,4 +1,4 @@
-# Codex Anywhere Android 0.6.6
+# Codex Anywhere Android 0.6.7
 
 面向自托管 Codex Anywhere 中继的非官方 Android 客户端。原生 Java 界面负责设备选择、会话列表、文字记录、草稿、请求状态和权限选择；本地打包的 JavaScript 模块负责设备认证、WebSocket 和端到端加密。不可见的 WebView 仅加载固定的本地协议资源，不加载远程聊天页面。
 
@@ -6,7 +6,8 @@
 
 - 打开会话或从后台返回时立即同步。App 在前台通常每秒检查当前会话；收到会话推送时会提前更新。读取失败时，常规重试间隔为 15 秒。
 - 手机发送后先显示消息和当前发送状态；确认写入会话记录后合并为一条。未确认的消息不自动重发。
-- 确认桌面原生输入通道不存在时，草稿区会显示「通过桌面发送文本」。点击后由桌面将文字投递到当前会话。投递结果待确认时请先同步记录。
+- 「发送指令」会优先使用桌面原生输入。连接器确认原生通道不存在时，自动通过桌面的兼容通道投递同一条文字。投递结果待确认时请先同步记录。
+- 输入框上方显示当前会话的模型与思考强度。点击可选择模型及其支持的强度。使用桌面兼容通道时，设置在后续兼容发送时生效。
 - 已选电脑重新上线时重建连接并恢复会话读取；读取失败时保留当前消息。
 - App 在前台时会尝试恢复因临时断网或认证到期而断开的中继连接。中继断开期间清除旧设备状态，区分手机未连中继与电脑离线。
 
@@ -50,7 +51,7 @@
 
 Windows 上运行 powershell -ExecutionPolicy Bypass -File build.ps1。依赖 JDK 21、Android SDK platform/build-tools 35、libs/zxing-core-3.5.3.jar。修改协议模块后须先通过 esbuild 打包 engine/protocol.ts 至 assets/protocol.js。
 
-产物为 out/CodexAnywhere-0.6.6.apk。本地开发签名位于 out/development.jks，须保留以便覆盖更新，不要发布该密钥。
+产物为 out/CodexAnywhere-0.6.7.apk。本地开发签名位于 out/development.jks，须保留以便覆盖更新，不要发布该密钥。
 
 历史消息加载和前台自动同步曾在小米 13 / Android 16 验证。消息发送状态、历史解析和连接恢复有独立测试。
 

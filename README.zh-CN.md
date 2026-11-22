@@ -6,7 +6,7 @@
 
 [下载 Android APK v0.6.3](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.3/CodexAnywhere-0.6.3.apk) · [发布说明](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.3) · [安卓版配置与构建](mobile-android/README.md)
 
-安卓版源码已更新到 v0.6.6，上方链接仍下载已发布的 v0.6.3 APK。
+安卓版源码已更新到 v0.6.7，上方链接仍下载已发布的 v0.6.3 APK。
 
 文档对应 **v0.4.5（2026-10-22）** · [发布与升级](docs/release-0.4.5.zh-CN.md) · [文档索引](docs/README.zh-CN.md)
 

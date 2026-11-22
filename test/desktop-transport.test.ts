@@ -161,12 +161,12 @@ test('explicit Desktop text delivery requires an absent native pipe and never re
     assert.equal(request.method, 'tools/call');
     assert.equal(request.params.tool, 'send_message_to_thread');
     assert.equal(request.params.threadId, 'fixture');
-    assert.deepEqual(request.params.arguments, { threadId: 'fixture', prompt: 'one' });
+    assert.deepEqual(request.params.arguments, { threadId: 'fixture', prompt: 'one', model: 'gpt-test', thinking: 'high' });
     if (calls === 1) reply(socket, request.id, { success: true });
     else socket.destroy();
   }, async client => {
     const desktop = desktopFor(client);
-    const draft = { threadId: 'fixture', text: ' one ' };
+    const draft = { threadId: 'fixture', text: ' one ', model: 'gpt-test', thinking: 'high' };
     desktop.userInput.pipe.connect = async () => {};
     await assert.rejects(desktop.sendTextViaAppTool(draft), /desktop_input_available/);
     desktop.userInput.pipe.connect = async () => { throw new NativeRequestError('timeout', false); };

@@ -6,7 +6,7 @@ This distribution adds a native Android client and Codex account controls for An
 
 [Download Android APK v0.6.3](https://github.com/wlnwl/codex-anywhere-android/releases/download/android-v0.6.3/CodexAnywhere-0.6.3.apk) · [Release notes](https://github.com/wlnwl/codex-anywhere-android/releases/tag/android-v0.6.3) · [Android setup and build](mobile-android/README.md)
 
-The Android source is at v0.6.6. The link above still downloads the published v0.6.3 APK.
+The Android source is at v0.6.7. The link above still downloads the published v0.6.3 APK.
 
 Documentation for **v0.4.5 (2026-10-22)** · [Release and upgrade](docs/release-0.4.5.md) · [Documentation index](docs/README.md)
 

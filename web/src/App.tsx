@@ -274,8 +274,6 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<ImageUploadState | null>(null);
   const [messageDelivery, setMessageDelivery] = useState<MessageDelivery | null>(null);
-  const [desktopTextDelivery, setDesktopTextDelivery] = useState<Pick<MessageDelivery,
-    'environmentId' | 'selectionVersion' | 'threadId'> & { legacyStateUnavailable?: boolean } | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [nativeState, setNativeState] = useState<{ environmentId: string; value: NativeDesktopState } | null>(null);
   const desktopState = online && !isManagedSession
@@ -598,6 +596,8 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const legacyAppServerAvailable = Boolean(threadId && !isManagedSession && connectorStatus?.capabilities.legacySessionAppServer);
   const legacyAppServerBusy = legacyAppServerAvailable && !running
     && (executionState === 'running' || executionState === 'waiting');
+  const desktopTextFallbackAvailable = Boolean(threadId && !isManagedSession && connectorStatus?.mode === 'desktop');
+  const legacyComposerBusy = legacyAppServerBusy && (!desktopTextFallbackAvailable || Boolean(pendingAttachment));
 
   const replayPendingRequests = useCallback(() => {
     if (!secureChannelRef.current?.isReady()) return 0;
@@ -1798,7 +1798,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     newSessionAutoSendRef.current = true;
   }, [closeNewSessionDialog, newSessionCwd, newSessionAttachment, newSessionPrompt, newSessionPermissionMode, online, uploading, connectorStatus?.capabilities.fullAccess, selectSession, setNewSessionAttachment, setPendingAttachment]);
 
-  const sendTurn = useCallback(async (questionReplies?: QuestionReply[], viaDesktopTool = false) => {
+  const sendTurn = useCallback(async (questionReplies?: QuestionReply[]) => {
     // A question response is independent of the message/attachment draft.
     if (questionReplies && (!threadId || threadId !== threadIdRef.current)) return;
     const text = questionReplies ? buildQuestionReply(questionReplies) : prompt.trim();
@@ -1811,7 +1811,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     const steering = canSteerOwnedTurn(
       running, executionState, ownedTurnThreadId, targetThreadId,
     );
-    const directDesktopDelivery = executionRoute !== 'appServer' && !legacyAppServerForTarget && canSendToActiveDesktopTurn(
+    const allowDesktopTextFallback = desktopTextFallbackAvailable && targetThreadId === threadId
+      && !steering && !questionReplies && !attachment;
+    const directDesktopDelivery = executionRoute !== 'appServer' && (!legacyAppServerForTarget || allowDesktopTextFallback) && canSendToActiveDesktopTurn(
       running, executionState, ownedTurnThreadId, targetThreadId,
     );
     if (
@@ -1819,13 +1821,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       || uploading
       || sendingRef.current.has(sendKey)
       || (running && !steering)
-      || (targetThreadId === threadId && legacyAppServerBusy)
+      || (targetThreadId === threadId && legacyAppServerBusy && !allowDesktopTextFallback)
       || (steering && Boolean(attachment))
     ) return;
-    if (viaDesktopTool && (!online || running || questionReplies || attachment || !targetThreadId || executionRoute === 'appServer'
-      || desktopTextDelivery?.environmentId !== environmentIdRef.current
-      || !isCurrentSessionRequest(desktopTextDelivery.threadId, targetThreadId,
-        desktopTextDelivery.selectionVersion, selectionVersion))) return;
     const isExistingSession = Boolean(targetThreadId);
     const selectedPermissionMode = isExistingSession
       ? permissionConfig?.mode
@@ -1939,14 +1937,11 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         });
       }
       const action = steering ? 'turn.steer' : 'turn.start';
-      const data = await request<TurnStartResult>(action, viaDesktopTool ? {
-        threadId: targetThreadId,
-        text: turnText,
-        delivery: 'desktop_tool',
-      } : {
+      const data = await request<TurnStartResult>(action, {
         text: turnText,
         ...(nativeImage ? { image: nativeImage } : {}),
         threadId: targetThreadId,
+        ...(allowDesktopTextFallback ? { allowDesktopTextFallback: true } : {}),
         ...(steering ? {} : {
           cwd: isExistingSession ? '' : projectCwd,
           ...(selectedPermissionMode && selectedPermissionMode !== 'custom' && !legacyAppServerForTarget
@@ -1965,10 +1960,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       const selectionStillCurrent = isCurrentSessionRequest(
         targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current,
       ) || Boolean(visibleDelivery(receipt, environmentIdRef.current, threadIdRef.current, selectedRequestRef.current));
-      if (selectionStillCurrent) {
-        setMessageDelivery(receipt);
-        if (!viaDesktopTool) setDesktopTextDelivery(null);
-      }
+      if (selectionStillCurrent) setMessageDelivery(receipt);
       if (data.threadId) {
         if (!isExistingSession) {
           const createdSession = {
@@ -2064,13 +2056,6 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (error instanceof Error && error.message === 'turn_cancelled') {
         return;
       }
-      if (!viaDesktopTool && (nativePipeMissing || legacyStateUnavailable) && !questionReplies
-        && targetThreadId && executionRoute !== 'appServer') {
-        setDesktopTextDelivery({ environmentId: delivery.environmentId, threadId: targetThreadId,
-          selectionVersion, legacyStateUnavailable });
-        return;
-      }
-      setDesktopTextDelivery(null);
       const uncertainDelivery = ['desktop_delivery_unknown', 'desktop_delivery_timeout'].includes(errorCode);
       if (uncertainDelivery && targetThreadId) {
         // Reconcile from persisted history; never automatically resend an uncertain delivery.
@@ -2084,8 +2069,8 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (attachment) setUploadProgress(null);
     }
   }, [
-    activeSession, addTimeline, connectorStatus, desktopTextDelivery, executionState, legacyAppServerAvailable, legacyAppServerBusy,
-    modelConfig, newSessionCwd, online, ownedTurnThreadId,
+    activeSession, addTimeline, connectorStatus, desktopTextFallbackAvailable, executionState, legacyAppServerAvailable, legacyAppServerBusy,
+    newSessionCwd, ownedTurnThreadId,
     pendingAttachment, permissionConfig, prompt, threadId,
     loadHistory, refreshSessions, rememberAttachment, rememberImage, reportTimelineError, request, resetExecution, running,
     updateExecution, updateSessionAttention, uploading,
@@ -2290,13 +2275,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const steeringAvailable = canSteerOwnedTurn(
     running, executionState, ownedTurnThreadId, threadId,
   );
-  const directDesktopDeliveryAvailable = !isManagedSession && !legacyAppServerAvailable && canSendToActiveDesktopTurn(
+  const directDesktopDeliveryAvailable = !isManagedSession && !legacyComposerBusy && canSendToActiveDesktopTurn(
     running, executionState, ownedTurnThreadId, threadId,
   );
-  const offerDesktopTextDelivery = Boolean(threadId && !isManagedSession
-    && desktopTextDelivery?.environmentId === environmentId
-    && isCurrentSessionRequest(desktopTextDelivery.threadId, threadId,
-      desktopTextDelivery.selectionVersion, selectedRequestRef.current));
   const stopAvailable = canStopOwnedTurn(
     running, ownedTurnThreadId, threadId || (creatingNewSession ? NEW_TURN_KEY : null),
   ) || Boolean(desktopState?.canStop);
@@ -2584,7 +2565,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
                 hasSession={Boolean(threadId)}
                 onRefresh={refreshModelConfig}
                 loading={modelConfigLoading}
-                disabled={!online || executionActive}
+                disabled={!online || (executionActive && modelConfig?.source !== 'desktop_tool')}
                 onSave={saveModelConfig}
               />
               <PermissionModeControl
@@ -2770,7 +2751,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
                   disabled={
                     !online
                     || uploading
-                    || legacyAppServerBusy
+                    || legacyComposerBusy
                     || (running && !steeringAvailable)
                     || (!prompt.trim() && !pendingAttachment)
                     || (!threadId && !newSessionCwd.trim())
@@ -2786,21 +2767,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               </button>
             </div>
           </div>
-          {offerDesktopTextDelivery && <div className="desktop-text-delivery">
-            <span>{pendingAttachment
-              ? t('通过桌面发送仅支持文字。请先移除附件。', 'Desktop text delivery requires removing the attachment.')
-              : desktopTextDelivery?.legacyStateUnavailable
-                ? t('连接器暂时无法确认会话状态。你仍可通过桌面工具发送文字。', 'The connector cannot verify the session state. You can still send text through the desktop tool.')
-                : t('桌面原生通道不可用，可以通过桌面工具发送文字。', 'You can use the desktop tool to send text while native input is unavailable.')}</span>
-            <button type="button" onClick={() => void sendTurn(undefined, true)}
-              disabled={!online || running || uploading || legacyAppServerBusy || deliveryReceipt?.status === 'sending'
-                || !prompt.trim() || Boolean(pendingAttachment)}>
-              {t('通过桌面发送文本', 'Send text through Desktop')}
-            </button>
-          </div>}
           <small>{steeringAvailable
             ? t('运行中可继续追加文字指令', 'You can steer this run with another text instruction')
-            : legacyAppServerBusy ? t('请等电脑上的任务结束后再发送。', 'Wait for the task on your computer to finish before sending.')
+            : legacyComposerBusy ? t('请等电脑上的任务结束后再发送。', 'Wait for the task on your computer to finish before sending.')
               : t('Ctrl/⌘+V 粘贴图片 · Ctrl/⌘+Enter 发送', 'Ctrl/⌘+V to paste an image · Ctrl/⌘+Enter to send')}</small>
         </footer>}
       </section>

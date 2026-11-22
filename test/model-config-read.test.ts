@@ -94,6 +94,25 @@ test('saved settings stay read-only until a live native update arrives', async t
   assert.equal(harness.state().modelConfig?.readOnly, false);
 });
 
+test('Desktop tool settings retain the model and effort selected for future messages', async t => {
+  const toolConfig = { ...readConfig, source: 'desktop_tool', serviceTier: null, readOnly: false };
+  const request = (async (action: string, payload: Record<string, unknown>) => {
+    if (action === 'session.model-config.read') return toolConfig;
+    if (action === 'session.model-config.update') {
+      assert.equal(payload.threadId, 'one');
+      return { ...toolConfig, reasoningEffort: payload.reasoningEffort };
+    }
+    return { capabilities: {} };
+  }) as BridgeRequest;
+  const harness = await configurationHarness(t, request);
+  await harness.render();
+  await act(async () => harness.state().saveModelConfig({ model: 'astra', reasoningEffort: 'xhigh', fastMode: false }));
+  await harness.render({ desktopState: { threadId: 'one', model: 'astra', reasoningEffort: 'high', serviceTier: 'default' } });
+  assert.equal(harness.state().modelConfig?.source, 'desktop_tool');
+  assert.equal(harness.state().modelConfig?.reasoningEffort, 'xhigh');
+  assert.equal(harness.state().modelConfig?.readOnly, false);
+});
+
 test('model initialization retries one transient failure and stops after recovery', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let reads = 0;

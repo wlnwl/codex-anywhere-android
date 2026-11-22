@@ -506,6 +506,7 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   footer button:disabled { opacity: .5; }
 }
 .model-config-toolbar { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 5px; }
+.model-config-toolbar > .model-config-model-select:only-child { grid-column: 1 / -1; }
 .model-fast-button {
   width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 9px; color: appearance.text(#878c95); background: transparent; cursor: pointer; transition: color .16s ease, background .16s ease, border-color .16s ease;
   svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
@@ -1374,12 +1375,6 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
 .message-delivery:empty { display: none; }
 .message-delivery.confirmed { color: appearance.text(#75d9b0); }
 .message-delivery.unconfirmed { color: appearance.text(#efbb78); }
-.desktop-text-delivery {
-  max-width: $content-width; margin: 6px auto 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px;
-  color: appearance.text(#aeb9c9); font-size: 12px;
-  button { min-height: 36px; padding: 4px 10px; border: 1px solid appearance.line(#405275); border-radius: 9px; background: appearance.surface(#1b2a43); color: appearance.text(#d9e8ff); font: inherit; }
-  button:disabled { opacity: .45; }
-}
 .attach-button { width: 36px; height: 40px; padding: 0; border: 0; border-radius: 10px; color: appearance.text(#aeb9c9); background: transparent; font-size: 26px; font-weight: 300; }
   .attach-button { @include interaction.hover { color: appearance.text(#dce6f8); background: appearance.surface(#1c2534); } }
   .attach-button:disabled, .image-preview button:disabled { opacity: .45; }

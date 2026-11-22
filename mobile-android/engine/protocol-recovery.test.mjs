@@ -94,9 +94,9 @@ function harness({ autoSelect = false } = {}) {
 test('connector restart clears stale keys, recovers the selected route and never replays mutation requests',()=>{
   const h=harness(), ws=h.connect();h.context.selectDevice('pc');
   const old=h.channels[0];old.becomeReady();
-  h.context.request('send-once','turn.start',{text:'example',delivery:'desktop_tool'});
+  h.context.request('send-once','turn.start',{threadId:'thread',text:'example',allowDesktopTextFallback:true});
   assert.equal(old.frames.length,1);
-  assert.equal(old.frames[0].payload.delivery,'desktop_tool');
+  assert.equal(old.frames[0].payload.allowDesktopTextFallback,true);
   ws.server({type:'presence',...h.devices([],['pc'])});
   assert.equal(old.cleared,true);
   assert.ok(h.events.some(e=>e.type==='disconnected'&&e.scope==='device'));
@@ -232,7 +232,7 @@ test('relay session expiry reauthenticates with the saved device key and recover
   ws.server({type:'auth.challenge',challenge:'first'});
   assert.equal(ws.frames[0].type,'auth.enroll');
   ws.server({type:'auth.ok',...h.devices()});h.context.selectDevice('pc');
-  const old=h.channels[0];old.becomeReady();h.context.request('sent','turn.start',{text:'send once',delivery:'desktop_tool'});
+  const old=h.channels[0];old.becomeReady();h.context.request('sent','turn.start',{threadId:'thread',text:'send once',allowDesktopTextFallback:true});
   ws.close(4005);
   assert.equal(old.cleared,true);
   const disconnected=h.events.filter(e=>e.type==='disconnected').at(-1);

@@ -16,7 +16,7 @@ public final class SendLedgerTest {
         scopesAreIndependent();
         confirmedIsTerminal();
         duplicateIdsDoNotDuplicateMessages();
-        desktopTextRetryRequiresDefiniteRejection();
+        newSendOnlyRemovesRejectedDuplicate();
         System.out.println("SendLedgerTest: " + assertions + " assertions passed");
     }
 
@@ -142,29 +142,22 @@ public final class SendLedgerTest {
         equal(true, rejected, "mismatched request ID reuse rejected");
     }
 
-    private static void desktopTextRetryRequiresDefiniteRejection() {
+    private static void newSendOnlyRemovesRejectedDuplicate() {
         String reason = "desktop_input_pipe_missing";
         SendLedger ledger = new SendLedger();
         ledger.begin("native", "pc", "chat", "hello", null);
         ledger.uncertain("native", "desktop_delivery_unknown");
-        equal(false, ledger.canRetryRejectedText("pc", "chat", "hello", reason),
-                "uncertain native delivery cannot unlock the desktop tool");
-        ledger.fail("native", reason);
-        equal(true, ledger.canRetryRejectedText("pc", "chat", "hello", reason),
-                "an explicit pre-dispatch rejection unlocks the desktop tool");
-        equal(false, ledger.canRetryRejectedText("pc", "chat", "edited", reason),
-                "editing the draft requires a new native attempt");
-        equal(false, ledger.canRetryRejectedText("other", "chat", "hello", reason),
-                "an unrelated device cannot reuse the rejection");
+        ledger.begin("rejected", "pc", "chat", "hello", null);
+        ledger.fail("rejected", reason);
+        ledger.begin("edited", "pc", "chat", "edited", null);
+        ledger.fail("edited", reason);
         ledger.begin("other", "other", "chat", "hello", null);
         ledger.fail("other", reason);
-        ledger.begin("uncertain", "pc", "chat", "hello", null);
-        ledger.uncertain("uncertain", "desktop_delivery_unknown");
-        equal(false, ledger.canRetryRejectedText("pc", "chat", "hello", reason),
-                "an outstanding delivery with the same text blocks retry");
-        ledger.discardRejectedText("pc", "chat", "hello", reason);
-        equal(1, ledger.entries("pc", "chat").size(), "consuming the offer preserves uncertain attempts");
-        equal(1, ledger.entries("other", "chat").size(), "consuming the offer leaves another device intact");
+        ledger.discardRejectedText("pc", "chat", "hello");
+        equal(2, ledger.entries("pc", "chat").size(), "a new send removes only its explicitly rejected duplicate");
+        equal("native", ledger.entries("pc", "chat").get(0).id, "uncertain original stays available for history matching");
+        equal("edited", ledger.entries("pc", "chat").get(1).id, "rejected different text stays visible");
+        equal(1, ledger.entries("other", "chat").size(), "another device stays intact");
     }
 
     private static List<SendLedger.SeenUser> users(String id, String text) {

@@ -222,6 +222,7 @@ export function useSessionConfiguration({
         serviceTier: desktopState.serviceTier || null, fastMode: /fast|priority/i.test(desktopState.serviceTier || ''),
         source: 'desktop', readOnly: true, models: [],
       } };
+      if (previous.value.source === 'desktop_tool') return previous;
       const tier = desktopState.serviceTier || 'default';
       const option = previous.value.models.find(model => model.model === desktopState.model)?.serviceTiers.find(value => value.id === tier);
       if (!previous.value.readOnly && previous.value.model === desktopState.model && previous.value.reasoningEffort === desktopState.reasoningEffort

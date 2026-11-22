@@ -12,6 +12,7 @@ import {
 } from './codex-desktop.js';
 
 type Payload = Record<string, any>;
+type DesktopModelSelection = { model: string; reasoningEffort: string };
 type BridgeRequest = {
   action: string;
   payload?: Payload;
@@ -96,6 +97,7 @@ type DispatchContext = Dependencies & Required<Pick<BridgeRequest, 'action'>> & 
   clientId?: string;
   clientDeviceId?: string;
   clientChannelId?: string;
+  desktopModelSelections: Map<string, DesktopModelSelection>;
   getDesktopStatuses(): SessionStatusSnapshot | null;
   refreshDesktopThreads(callerThreadId: unknown): void;
 };
@@ -120,6 +122,7 @@ export function createRequestHandler({
   deviceLabel = deviceId, mode = desktop ? 'desktop' : 'headless',
   networkAccess = false, allowFullAccess = false, onSessionStatuses, watchDesktopNotifications,
 }: Dependencies) {
+  const desktopModelSelections = new Map<string, DesktopModelSelection>();
   let desktopStatusCache: (SessionStatusSnapshot & { updatedAt: number }) | null = null;
   let desktopStatusRefresh: Promise<void> | null = null;
   let lastRefreshStarted = -Infinity;
@@ -152,7 +155,7 @@ export function createRequestHandler({
       const run = () => dispatchAction({
         action, payload, requestId, clientId, clientDeviceId, clientChannelId,
         codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, accounts,
-        networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads, watchDesktopNotifications,
+        networkAccess, allowFullAccess, desktopModelSelections, getDesktopStatuses, refreshDesktopThreads, watchDesktopNotifications,
       });
       const data = await (MEASURED_ACTIONS.has(action) ? measureOperation(action, run) : run());
       return { type: 'response', clientId, requestId, ok: true, data };
@@ -165,7 +168,7 @@ export function createRequestHandler({
 async function dispatchAction({
   action, payload, requestId, clientId, clientDeviceId, clientChannelId,
   codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, accounts,
-  networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads, watchDesktopNotifications,
+  networkAccess, allowFullAccess, desktopModelSelections, getDesktopStatuses, refreshDesktopThreads, watchDesktopNotifications,
 }: DispatchContext) {
   const managedSession = mode === 'desktop'
     && codex.ownsManagedSession?.(String(payload.threadId || '').trim()) === true;
@@ -292,6 +295,21 @@ async function dispatchAction({
       if (!desktop?.controls || !codex.listModels) throw new Error('desktop_input_unsupported');
       const threadId = String(payload.threadId || '');
       const catalog = headerModelCatalog(codex);
+      if (desktop.sendTextViaAppTool && await desktop.nativeInputMissing?.()) {
+        const models = await catalog;
+        const remembered = desktopModelSelections.get(threadId);
+        const saved = await codex.readStoredModelConfig?.(threadId, models).catch(() => null);
+        const choice = remembered && models.some(model => model.model === remembered.model) ? remembered : saved;
+        const model = models.find(option => option.model === choice?.model)
+          || models.find(option => option.isDefault) || models[0];
+        if (!model) {
+          if (saved) return saved;
+          throw new Error('desktop_model_unavailable');
+        }
+        const effort = choice?.model === model.model ? choice.reasoningEffort : model.defaultReasoningEffort;
+        return { model: model.model, reasoningEffort: effort || model.defaultReasoningEffort,
+          serviceTier: null, fastMode: false, source: 'desktop_tool', readOnly: false, models };
+      }
       try { return await desktop.controls.modelConfig(threadId, catalog); }
       catch (error) {
         if (!codex.readStoredModelConfig) throw error;
@@ -303,7 +321,23 @@ async function dispatchAction({
   if (action === 'session.model-config.update') {
     if (mode === 'desktop' && !managedSession) {
       if (!desktop?.controls || !codex.listModels) throw new Error('desktop_input_unsupported');
-      return desktop.controls.updateModel(String(payload.threadId || ''), payload, await codex.listModels());
+      const threadId = String(payload.threadId || '').trim();
+      if (!threadId || threadId.length > 256) throw new Error('thread_id_required');
+      const models = await codex.listModels();
+      if (desktop.sendTextViaAppTool && await desktop.nativeInputMissing?.()) {
+        if (payload.fastMode === true) throw new Error('fast_mode_not_available');
+        const model = models.find(option => option.model === payload.model);
+        if (!model) throw new Error('model_not_available');
+        if (!model.supportedReasoningEfforts.some((option: Payload) => option.reasoningEffort === payload.reasoningEffort)) {
+          throw new Error('reasoning_effort_not_available');
+        }
+        const selection = { model: model.model, reasoningEffort: payload.reasoningEffort };
+        desktopModelSelections.delete(threadId);
+        desktopModelSelections.set(threadId, selection);
+        if (desktopModelSelections.size > 512) desktopModelSelections.delete(desktopModelSelections.keys().next().value!);
+        return { ...selection, serviceTier: null, fastMode: false, source: 'desktop_tool', readOnly: false, models };
+      }
+      return desktop.controls.updateModel(threadId, payload, models);
     }
     return codex.updateModelConfig(String(payload.threadId || ''), payload);
   }
@@ -396,7 +430,7 @@ async function dispatchAction({
   }
   if (action === 'turn.start') {
     const { edit: _edit, ...input } = payload;
-    return startTurn({ codex, desktop, mode, payload: input, clientId, requestId, browser, attachments });
+    return startTurn({ codex, desktop, mode, payload: input, clientId, requestId, browser, attachments, desktopModelSelections });
   }
   if (action === 'turn.steer') {
     return {
@@ -464,10 +498,12 @@ async function dispatchAction({
 }
 
 async function startTurn({
-  codex, desktop, mode, payload, clientId, requestId, browser, attachments,
-}: Pick<DispatchContext, 'codex' | 'desktop' | 'mode' | 'payload' | 'clientId' | 'requestId' | 'browser' | 'attachments'>) {
+  codex, desktop, mode, payload, clientId, requestId, browser, attachments, desktopModelSelections,
+}: Pick<DispatchContext, 'codex' | 'desktop' | 'mode' | 'payload' | 'clientId' | 'requestId' | 'browser' | 'attachments' | 'desktopModelSelections'>) {
   const threadId = String(payload.threadId || '').trim();
   const managedSession = Boolean(threadId && codex.ownsManagedSession?.(threadId));
+  const selection = desktopModelSelections.get(threadId);
+  const overrides = selection ? { model: selection.model, thinking: selection.reasoningEffort } : {};
   if (payload.delivery === 'desktop_tool') {
     if (mode !== 'desktop' || !threadId || managedSession || !desktop?.sendTextViaAppTool) {
       throw new Error('desktop_text_delivery_unavailable');
@@ -477,7 +513,7 @@ async function startTurn({
     const deliver = desktop.sendTextViaAppTool.bind(desktop);
     await codex.prepareDesktopTurn?.();
     return sendWithBrowserContext(browser, threadId, payload.text,
-      (text) => deliver({ threadId, text }));
+      (text) => deliver({ threadId, text, ...overrides }));
   }
   if (!threadId || mode === 'headless' || managedSession) {
     if (managedSession && payload.image) throw new Error('desktop_image_unsupported');
@@ -498,25 +534,27 @@ async function startTurn({
   // before any send. The app-server verifies the existing target and writer.
   const startLegacy = codex.startLegacyTurn?.bind(codex);
   const checkLegacyIdle = desktop?.assertLegacySessionIdle?.bind(desktop);
-  if (startLegacy && checkLegacyIdle && await desktop?.nativeInputMissing?.()) {
+  const allowTextFallback = payload.allowDesktopTextFallback === true && !payload.image && !payload.attachment;
+  if (!allowTextFallback && startLegacy && checkLegacyIdle && await desktop?.nativeInputMissing?.()) {
     if (payload.image) throw new Error('desktop_image_unsupported');
     const result = await sendWithBrowserContext(browser, threadId, payload.text, text => startLegacy(
       { threadId, text, clientId, requestId }, () => checkLegacyIdle(threadId),
     ));
     return { ...result, delivery: 'appServer', executionRoute: 'appServer' };
   }
-  // When native input is available, let Desktop remain the writer. A native
-  // send failure is never retried on another route, even when it times out.
+  // Only a missing native endpoint before dispatch permits the app-tool fallback.
   if (!desktop) throw new Error('desktop_app_unavailable');
   const imagePath = payload.image && attachments.nativeInput ? await attachments.nativeInput(payload.image) : undefined;
   if (payload.image && !imagePath) throw new Error('desktop_image_unsupported');
   await codex.prepareDesktopTurn?.();
-  return sendWithBrowserContext(browser, threadId, payload.text, (text) => desktop.sendMessage({
-    threadId,
-    text,
-    requestId,
-    ...(imagePath ? { imagePath } : {}),
-  }));
+  return sendWithBrowserContext(browser, threadId, payload.text, async (text) => {
+    try {
+      return await desktop.sendMessage({ threadId, text, requestId, ...(imagePath ? { imagePath } : {}) });
+    } catch (error) {
+      if (!allowTextFallback || (error as Error).message !== 'desktop_input_pipe_missing' || !desktop.sendTextViaAppTool) throw error;
+      return desktop.sendTextViaAppTool({ threadId, text, ...overrides });
+    }
+  });
 }
 
 function sendWithBrowserContext<T>(browser: BrowserSessionBroker | undefined, threadId: string, text: unknown, deliver: (text: unknown) => Promise<T>) {

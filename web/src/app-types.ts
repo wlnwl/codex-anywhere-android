@@ -25,7 +25,7 @@ export type ModelOption = {
   isDefault: boolean;
 };
 export type SessionModelConfig = {
-  source?: 'desktop' | 'persisted';
+  source?: 'desktop' | 'persisted' | 'desktop_tool';
   readOnly?: boolean;
   model: string;
   reasoningEffort: string;
